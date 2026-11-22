@@ -1,0 +1,687 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>狐兔像素海崖小村 v3</title>
+<style>html,body{margin:0;height:100%;background:#120f22;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{width:min(100vw,177.7vh);image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;cursor:pointer}</style>
+<canvas id=c width=320 height=180></canvas>
+<script src="kit_sprites.js"></script>
+<script src="pixfont.js"></script>
+<script>
+// v3：纯代码像素。320x180 索引色缓冲 + 32 色固定调色板（时段整板替换；天气只改天空/远景色），无抖动、无半透明、整数放大
+const W=320,H=180,WW=970,HOR=88;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');ctx.imageSmoothingEnabled=false;
+const img=ctx.createImageData(W,H),u32=new Uint32Array(img.data.buffer),buf=new Uint8Array(W*H);
+const SL='tr sk0 sk1 sk2 sk3 cl cls mt1 mt2 seaD sea seaL foam ink clD clM grD gr grL stone woD woM roR roD roB wall wallS fC fS peach pink lit glow1'.split(' ');
+const C={};SL.forEach((n,i)=>C[n]=i);
+// 夜色板里 fC/fS/peach/pink/lit/glow1 是「保护色组」：保持暖色相，只压暗约 8–12%，狐兔夜里仍是奶白+橘耳
+const PALS={
+ day:'#4f8fd8 #69a9e8 #8fc6f0 #c0e6f6 #ffffff #c6dcf0 #8eaed2 #6890b4 #2a6aa4 #3d8cc6 #8ad0ec #ffffff #2a1d2e #6e5a52 #a08672 #4f8a3a #85b83f #b8dc6a #ddd2c0 #6b3f2e #a8683a #d6574a #8f3a40 #4a80a8 #f3e6d0 #d4bfa4 #fff1da #f1cfa6 #f8a874 #f59aa0 #ffe27a #f7b04a',
+ dusk:'#3b2a6b #7e4691 #e2767e #fbc489 #ffd9b8 #c47a9c #9a5f8e #6a4276 #3e3272 #6a4486 #f6aa7c #fff0e4 #24162e #4b3a5a #7d5a6c #46653e #6f9a52 #9fba62 #c4a6a4 #5a3430 #95583a #c8524a #7e3242 #4a5a8c #e8cdb8 #bf9a8e #fbe8d2 #ecc6a0 #f39c66 #ef8f98 #ffe08a #f0a050',
+ night:'#0b0a22 #141540 #1f285c #2f4078 #8a94c6 #474c82 #2b3060 #1d2248 #0e1636 #17244c #6a82c2 #e4ecff #0a0818 #1c1a30 #35334f #1d3838 #2e5848 #46785a #66648a #4a2e2a #6e4a40 #7c3a54 #4e2a44 #2e3c6a #857b9e #645c80 #ecdcc2 #d2b08c #e08e5c #da8890 #ffe27a #eea24c',
+ dawn:'#5a7cc2 #98b2dc #eec4c8 #fde6b2 #fff6ee #d8b8cc #a09cc4 #7a80aa #4878ac #66a2c8 #ffe2d2 #ffffff #2a2038 #5c5a72 #8c8692 #4c7a4a #7fb55c #aacc72 #e0d2ca #643c34 #a0643c #e0665a #9a4450 #5a80b0 #f6e8dc #d8c0b0 #fff2e2 #f0caa8 #f8a874 #f59aa0 #ffe9a0 #f2b060'};
+const PHN={dawn:'黎明',day:'白天',dusk:'黄昏',night:'夜'};
+function parsePal(s){return [[0,0,0]].concat(s.split(' ').map(h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]))}
+for(const k in PALS)PALS[k]=parsePal(PALS[k]);
+// 天气只改「天空/云/远景/海」这些槽，角色与发光物槽不动
+const WXSLOT=['sk0','sk1','sk2','sk3','cl','cls','mt1','mt2','seaD','sea','seaL'].map(n=>C[n]);
+function wxPal(base,wx){const p=base.map(c=>c.slice());if(wx==='sun')return p;
+ const amt=wx==='rain'?.6:(wx==='snow'?.45:.7),lift=wx==='rain'?.82:(wx==='snow'?1.04:1.08);
+ for(const i of WXSLOT){const c=p[i],l=(c[0]*.3+c[1]*.55+c[2]*.15);let g=wx==='fog'?l*.55+150:l;for(let k=0;k<3;k++)p[i][k]=Math.max(0,Math.min(255,Math.round((c[k]+(g-c[k])*amt)*lift)))}
+ if(wx==='fog'){const s=p[C.sk3];[C.mt1,C.mt2].forEach((i,j)=>{for(let k=0;k<3;k++)p[i][k]=Math.round(p[i][k]+(s[k]-p[i][k])*(.6-j*.25))})}
+ return p}
+let palCur=PALS.day.map(c=>c.slice()),palFrom=null,palTo=PALS.day,palK=4,palT=0;
+const pal32=new Uint32Array(33);
+function bakePal(){for(let i=0;i<33;i++){const c=palCur[i];pal32[i]=(255<<24)|(c[2]<<16)|(c[1]<<8)|c[0]}}
+bakePal();
+// ---------- 基础绘制 ----------
+let OX=0,OY=0;
+function px(x,y,c){x=Math.round(x-OX);y=Math.round(y-OY);if(x<0||y<0||x>=W||y>=H||!c)return;buf[y*W+x]=c}
+function gp(x,y){x=Math.round(x-OX);y=Math.round(y);if(x<0||y<0||x>=W||y>=H)return 0;return buf[y*W+x]}
+function rect(x,y,w,h,c){x=Math.round(x-OX);y=Math.round(y-OY);const x0=Math.max(0,x),x1=Math.min(W,x+w),y0=Math.max(0,y),y1=Math.min(H,y+h);if(x1<=x0)return;for(let yy=y0;yy<y1;yy++)buf.fill(c,yy*W+x0,yy*W+x1)}
+function disc(cx,cy,r,c){for(let y=-r;y<=r;y++){const w=Math.floor(Math.sqrt(r*r-y*y+r*.8));rect(cx-w,cy+y,w*2+1,1,c)}}
+function line(x0,y0,x1,y1,c){x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);const dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1;let e=dx+dy;for(let i=0;i<600;i++){px(x0,y0,c);if(x0===x1&&y0===y1)break;const e2=2*e;if(e2>=dy){e+=dy;x0+=sx}if(e2<=dx){e+=dx;y0+=sy}}}
+const hsh=(x,y)=>(((x*73856093)^(y*19349663)^(x*y*83492791))&0x7fffffff);
+const LG={'.':0,k:C.ink,w:C.foam,r:C.roR,R:C.roD,y:C.lit,h:C.glow1,o:C.peach,p:C.pink,g:C.gr,G:C.grD,l:C.grL,b:C.woM,B:C.woD,s:C.stone,f:C.fC,F:C.fS,c:C.wall,S:C.wallS,m:C.clM,d:C.clD,q:C.seaL,u:C.roB,L:C.cl,x:C.cls,a:C.sea,D:C.seaD};
+function mkspr(rows,ol){let h=rows.length,w=Math.max(...rows.map(r=>r.length));let a=new Uint8Array(w*h);rows.forEach((r,y)=>{for(let x=0;x<r.length;x++)a[y*w+x]=LG[r[x]]||0});
+ if(ol){const W2=w+2,H2=h+2,b=new Uint8Array(W2*H2);for(let y=0;y<h;y++)for(let x=0;x<w;x++)b[(y+1)*W2+x+1]=a[y*w+x];const o=b.slice();for(let y=0;y<H2;y++)for(let x=0;x<W2;x++){if(b[y*W2+x])continue;for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<W2&&yy<H2&&b[yy*W2+xx]&&b[yy*W2+xx]!==C.ink){o[y*W2+x]=C.ink;break}}}return{w:W2,h:H2,a:o}}
+ return{w,h,a}}
+function blit(s,x,y,flip,shear){x=Math.round(x);y=Math.round(y);for(let j=0;j<s.h;j++){const sh=shear?shear(j):0;for(let i=0;i<s.w;i++){const v=s.a[j*s.w+(flip?s.w-1-i:i)];if(v)px(x+i+sh,y+j,v)}}}
+// ---------- 像素中文字（Fusion Pixel 10px 子集，1-bit） ----------
+function glyph(ch){return PF.g[ch]||PF.g['?']}
+function measure(s){let w=0;for(const ch of s){if(ch===' '){w+=4;continue}const g=glyph(ch);w+=g?g[0]:6}return w}
+function ptext(s,x,y,c,sc){sc=sc||1;const base=y+9*sc;for(const ch of s){if(ch===' '){x+=4*sc;continue}const g=glyph(ch);if(!g){x+=6*sc;continue}const[dw,w,h,xo,yo,rows]=g;
+  for(let i=0;i<h;i++){const r=rows[i];for(let j=0;j<w;j++)if((r>>(w-1-j))&1){const X=x+(xo+j)*sc,Y=base+(-yo-h+i)*sc;if(sc===1)px(X,Y,c);else rect(X,Y,sc,sc,c)}}x+=dw*sc}return x}
+// ---------- 狐兔 ----------
+const FOXMAP={O:C.woD,C:C.fC,S:C.fS,P:C.peach,K:C.pink,E:C.ink,B:C.woM,W:C.foam,G:C.gr,g:C.grD,T:C.pink,N:C.roD,A:C.woM};
+const foxCache={};
+function foxSpr(o){const k=JSON.stringify(o);if(foxCache[k])return foxCache[k];const f=Fox.frame(o);const a=new Uint8Array(f.w*f.h);for(let i=0;i<a.length;i++)a[i]=f.a[i]?FOXMAP[f.a[i]]||0:0;return foxCache[k]={w:f.w,h:f.h,a}}
+// ---------- 文本表（gen_font.py 只从这里取字） ----------
+/*TXT*/const TXT={bear:'早呀！今天也要加油',mouse:'欢迎光临～\n小店的苹果最甜',owl:'夜里灯塔的光\n会扫过海面哦',hedge:'别摸我，会扎手！',frog:'下雨天最棒了，呱',duck:'嘎！码头的企鹅\n很会钓鱼',
+ pengWait:'嘘…鱼快上钩了',pengGive:'钓到啦！送你一条',pengHas:'先把鱼送出去吧',cat:'喵～',catFish:'喵呜！最喜欢鱼了',catWant:'喵…（盯着企鹅的鱼）',chick:'叽叽！',crab:'横着走才帅',gull:'啊——啊——',
+ mailNo:'先去找到那封信吧',mailPost:'寄出啦！',mailDone:'回信已经收到啦',fox:'嗨～',foxShy:'别、别一直看我嘛',lampOn:'亮了！',boat:'去小岛看看吧',boatBack:'回村子啦',
+ sun:'晴',rain:'下雨了',snow:'下雪了',fog:'起雾了',island:'望海小岛',village:'海崖小村',
+ cardT:'完成！',card1:'8 件宝物全部集齐',card2:'流星雨之夜',card3:'点一下继续',mailT:'收到回信',mail1:'今晚来灯塔下',mail2:'一起看流星雨吧！',mail3:'— 灯塔守护人',
+ got:'获得',shell:'贝壳',letter:'信',apple:'苹果',star:'海星',mush:'蘑菇',feather:'羽毛',pearl:'珍珠',bottle:'瓶中信',map:'地图',weather:'天气'};/*END*/
+// ---------- 世界布局（v3：建筑放大约 1.6 倍，狐兔与门同高） ----------
+const SEG=[[70,160,162],[160,168,156],[168,430,150],[430,438,144],[438,700,138],[700,708,132],[708,920,126]];
+function gyV(x){for(const s of SEG)if(x>=s[0]&&x<s[1])return s[2];return x<70?176:176}
+const ISEG=[[60,100,162],[100,108,156],[108,226,150],[226,234,156],[234,258,162]];
+function gyI(x){for(const s of ISEG)if(x>=s[0]&&x<s[1])return s[2];return 176}
+let scene='village';
+const gy=x=>scene==='island'?gyI(x):gyV(x);
+const isPier=x=>scene==='village'&&x>=70&&x<160;
+const HOUSES=[
+ {x:182,w:64,wh:50,roof:C.roR,timber:1,an:'bear',num:1,chim:.74,box:1},
+ {x:296,w:62,wh:46,roof:C.roB,awn:1,an:'mouse',num:2,chim:.24},
+ {x:444,w:72,wh:60,roof:C.roR,two:1,an:'owl',num:3,chim:.72,box:1},
+ {x:528,w:56,wh:46,roof:C.woM,an:'hedge',num:4,chim:.28},
+ {x:598,w:50,wh:44,roof:C.roB,an:'frog',num:5,chim:.72,cat:1},
+ {x:716,w:62,wh:50,roof:C.roR,timber:1,an:'duck',num:6,chim:.3,box:1}];
+HOUSES.forEach(h=>{h.base=gyV(h.x+2)-7;h.door=0;h.dt=0;h.rh=Math.round(h.w*.42);h.dw=13;h.dh=24;h.dx=h.x+Math.floor(h.w/2)-6;if(h.two)h.dx=h.x+h.w-24});
+const LH={x:836,w:30,base:gyV(838)-7,h:92};
+const ITEMS=[{k:'shell',x:124,s:'village'},{k:'letter',x:266,s:'village'},{k:'apple',x:384,s:'village'},{k:'star',x:522,s:'village'},{k:'mush',x:664,s:'village'},{k:'feather',x:904,s:'village'},{k:'bottle',x:140,s:'island'},{k:'pearl',x:242,s:'island'}];
+ITEMS.forEach(it=>{it.y=(it.s==='island'?gyI(it.x):gyV(it.x))-2;it.got=0});
+const ICON={
+ shell:mkspr(['..ppp..','.pfpfp.','pfpfpfp','pfpfpfp','.ppppp.','..ooo..'],1),
+ letter:mkspr(['bffffffb','fbffffbf','ffbrrbff','fffrrfff','ffffffff'],1),
+ apple:mkspr(['...B...','..Bg...','.rrrrr.','rrfrrrr','rrrrrrr','rrrrrrR','.rrRrR.'],1),
+ star:mkspr(['...o...','..ooo..','ooooooo','.ooyoo.','..ooo..','.oo.oo.','oo...oo'],1),
+ mush:mkspr(['..rrr..','.rfrrr.','rrrrfrr','rRrrrRr','..fff..','..fff..','..fFf..'],1),
+ feather:mkspr(['.....fw','....fwf','...fwf.','..fwf..','.fwf...','fBf....','B......'],1),
+ pearl:mkspr(['..ppp..','.pfpfp.','pRRRRRp','pRwwwRp','pfwwqfp','.ppppp.'],1),
+ bottle:mkspr(['..bb..','..xx..','.qqqq.','.qffq.','.qffq.','.qqqq.'],1),
+ fish:mkspr(['.qq.q','qqqqq','.qq.q'],1)};
+// v3 动物：11 宽，配合 13 宽的门
+const ANIM={
+ bear:mkspr(['.bb.....bb.','bBbbbbbbbBb','.bbbbbbbbb.','bbkbbbbbkbb','bbbbooobbbb','bbbookoobbb','.bbbooobbb.','..bbbbbbb..','.bbbbbbbbb.','bbbbbbbbbbb'],0),
+ mouse:mkspr(['sss.....sss','spps...spps','sss.sss.sss','..sssssss..','.sskssskss.','.sssspssss.','..sssssss..','...sssss...','..sssssss..','.sssssssss.'],0),
+ owl:mkspr(['B.........B','BbbbbbbbbbB','bbbbbbbbbbb','bwwwbbbwwwb','bwkwbbbwkwb','bwwwbybwwwb','bbbbbybbbbb','bfbfbbbfbfb','bbfbfbfbfbb','.bbbbbbbbb.'],0),
+ hedge:mkspr(['.B.B.B.B.B.','BBBBBBBBBBB','BBBoooooBBB','BBoooooooBB','BokoooookoB','BoooopooooB','BBooooooBBB','BBBoooooBBB','.BBBBBBBBB.','..BBBBBBB..'],0),
+ frog:mkspr(['.ggg...ggg.','gwwkg.gkwwg','gwwwgggwwwg','ggggggggggg','gGgggggggGg','ggkkkkkkkgg','ggglppplggg','.glllllllg.','..ggggggg..','.ggg...ggg.'],0),
+ duck:mkspr(['...yyyyy...','..yyyyyyy..','.yykyyykyy.','.yyyyyyyyy.','.yyhhhhhyy.','..yhhhhhy..','..yyyyyyy..','.yyyyyyyyy.','yyyyyyyyyyy','yyyyyyyyyyy'],0)};
+const CHICK=[mkspr(['....r...','...rww..','...wkwo.','w..www..','wwwwww..','.wwwwL..','..o.o...'],1),
+ mkspr(['........','........','w...r...','wwwwwr..','.wwwwkw.','..wwwwwo','..o.o...'],1),
+ mkspr(['....r...','...rww..','...wkwo.','w..www..','wwwwww..','.wwwww..','...oo...'],1)];
+const CAT=[mkspr(['o...o','oo.oo','ooooo','okoko','oopoo','.ooo.','obooo','oobbo','ooooo','oo.oo'],1),
+ mkspr(['o...o','oo.oo','ooooo','obobo','oopoo','.ooo.','obooo','oobbo','ooooo','oo.oo'],1),
+ mkspr(['o...o','oo.oo','ooooo','ooooo','obobo','.ooo.','ooooo','obbbo','ooooo','oo.oo'],1),
+ mkspr(['o...o','oo.oo','ooooo','okoko','oppoo','.ooo.','obooo','oobbo','ooooo','oo.oo'],1)];
+const CATHAPPY=mkspr(['o...o','oo.oo','ooooo','okoko','oopoo','.ooo.','obooo','oobbo','ooooo','oo.oo'].map((r,i)=>i===3?'o^o^o'.replace(/\^/g,'k'):r),1);
+const CATTAIL=[[[5,8],[6,8],[7,7],[7,6],[7,5]],[[5,8],[6,8],[7,8],[8,7],[8,6]],[[5,8],[6,7],[6,6],[7,5],[7,4]]];
+const PENG=[mkspr(['...yyy...','..yyyyy..','yyyyyyyy.','.kkkkkk..','.kwkkwkk.','okwwwwwk.','.kwwwwwkk','.kwwwwwk.','.kwwwwwk.','..kkkkk..','..o..o...'],0),
+ mkspr(['..yyy....','.yyyyy...','yyyyyyyy.','.kkkkkk..','.kwkkwkk.','okwwwwwk.','.kwwwwwkk','.kwwwwwkk','.kwwwwwk.','..kkkkk..','..o..o...'],0)];
+const GULL=[mkspr(['k.....k','.w...w.','..www..'],0),mkspr(['.......','ww.w.ww','..www..'],0),mkspr(['.......','..www..','.w...w.'],0)];
+const GULLSIT=mkspr(['.ww..','kwwo.','.wwww','..Lw.','..o..'],0);
+const FISH=mkspr(['.qq.q','qqqqq','.qq.q'],0);
+const PIGEON=[mkspr(['..ww.....','.wwwwr...','wkwwwwww.','..wwwwLL.','...o.o...'],1),mkspr(['...www...','..wwwww..','.wkwwwwwr','..wwwwLL.','...o.o...'],1)];
+const CRAB=[mkspr(['r.....r','rr.k.k.rr'.slice(0,7),'.rrrrr.','r.r.r.r'],1),mkspr(['.r...r.','rr.k.krr'.slice(0,7),'.rrrrr.','.r.r.r.'],1)];
+const BALLOON=[C.roR,C.lit,C.seaL,C.pink,C.grL];
+// 云
+const CLOUDS=[];
+function mkCloud(w,seed){const h=18,a=new Uint8Array(w*h);let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147483647;const blobs=[];const n=3+(w>>4);
+ for(let i=0;i<n;i++){const bx=6+(w-12)*(i+.5)/n+(r()-.5)*4,br=3+r()*Math.min(5,w/7)+(i===n>>1?2:0);blobs.push([bx,h-3-br*.7,br])}
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let inn=false;for(const[bx,by,br]of blobs)if((x+.5-bx)**2+((y+.5-by)*1.15)**2<=br*br&&y<h-1)inn=true;if(inn)a[y*w+x]=C.cl}
+ for(let x=0;x<w;x++){let bot=-1;for(let y=h-1;y>=0;y--)if(a[y*w+x]){bot=y;break}if(bot>0){a[bot*w+x]=C.cls;if(bot>1&&a[(bot-1)*w+x]&&(x+bot)%3)a[(bot-1)*w+x]=C.cls}}
+ return{w,h,a}}
+[[46,3],[30,9],[60,15],[36,21],[24,33],[52,41],[40,47]].forEach(([w,s],i)=>CLOUDS.push({s:mkCloud(w,s),x:i*96+20,y:[14,30,8,40,22,12,34][i],sp:[.03,.05,.02,.06,.04,.035,.045][i],extra:i>=5,rx:0,ry:0}));
+// 树
+function mkTree(r,seed,apples){const w=r*2+6,h=r*2+4,a=new Uint8Array(w*h);let s=seed;const rn=()=>(s=(s*16807)%2147483647)/2147483647;
+ const bl=[[w/2,h/2,r]];for(let i=0;i<7;i++){const an=i/7*Math.PI*2;bl.push([w/2+Math.cos(an)*r*.6,h/2+Math.sin(an)*r*.45,r*.55+rn()*1.5])}
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let inn=0,lt=0;for(const[bx,by,br]of bl){const d=(x+.5-bx)**2+(y+.5-by)**2;if(d<=br*br){inn=1;if((x+.5-bx+br*.35)**2+(y+.5-by+br*.4)**2<=(br*.55)**2)lt=1}}
+  if(inn)a[y*w+x]=lt?C.grL:(y>h*.62||x>w*.72?C.grD:C.gr)}
+ for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){const v=a[y*w+x];if(v===C.gr&&hsh(x,y+seed)%9===0)a[y*w+x]=C.grD;if(v===C.gr&&hsh(x+3,y)%13===0)a[y*w+x]=C.grL}
+ if(apples)for(const[ax,ay]of apples){a[ay*w+ax]=C.roR;a[ay*w+ax+1]=C.roR;a[(ay+1)*w+ax]=C.roD;a[(ay+1)*w+ax+1]=C.roR}
+ const o=a.slice();for(let y=0;y<h;y++)for(let x=0;x<w;x++){if(a[y*w+x])continue;for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<w&&yy<h&&a[yy*w+xx]){o[y*w+x]=C.ink;break}}}
+ const tops=[];for(let x=0;x<w;x++){let t=-1;for(let y=0;y<h;y++)if(o[y*w+x]&&o[y*w+x]!==C.ink){t=y;break}tops.push(t)}
+ return{w,h,a:o,tops}}
+const TREES=[{x:384,r:17,th:26,s:mkTree(17,5,[[11,13],[22,9],[28,19],[16,24],[31,13],[8,21]])},{x:796,r:15,th:22,s:mkTree(15,11,0)},{x:164,r:10,th:16,s:mkTree(10,23,0),back:1}];
+const LAMPS=[{x:174,on:0},{x:424,on:0},{x:692,on:0},{x:888,on:0}];
+// 远山：中点位移，两层（远：雪线；近：树线）
+function mdisp(n,rough,seed){let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147483647;const a=new Float32Array(n+1);a[0]=r();a[n]=r();let step=n,sc=1;while(step>1){const h=step>>1;for(let i=h;i<n;i+=step)a[i]=(a[i-h]+a[i+h])/2+(r()-.5)*sc;sc*=rough;step=h}return a}
+const MF=mdisp(512,.55,77),MN=mdisp(512,.6,91);
+const MD=mdisp(512,.7,133);
+function norm(a){let lo=1e9,hi=-1e9;for(const v of a){lo=Math.min(lo,v);hi=Math.max(hi,v)}return Array.from(a,v=>(v-lo)/(hi-lo))}
+const nF=norm(MF.map((v,i)=>v+.5*Math.abs(Math.sin(i/37))+ .35*MD[i])),nN=norm(MN.map((v,i)=>v+.3*Math.sin(i/19)+.3*MD[(i*3)%512]));
+const MTF=[],MTN=[];for(let i=0;i<=512;i++){MTF.push(Math.round(8+Math.pow(nF[i],1.4)*40));MTN.push(Math.round(3+nN[i]*16))}
+// ---------- 状态 ----------
+let T=0,gm=9*60,phase='day',beam=1,muted=false,camX=0,weather='sun',snowAcc=0,rainAcc=0,toast=null,toastT=0;
+const fox={x:100,y:162,vy:0,air:0,face:1,tx:null,run:0,af:0,land:0,idle:0,emo:null,emoT:0,bub:null,bubT:0,cb:null,carry:null,inBoat:0,stretched:0,clicks:0,clickT:0};
+const smoke=[],fw=[],sparks=[],splash=[],flash=[],drops=[],flakes=[],ripples=[],says=[],breath=[],confetti=[],balloons=[],meteors=[],eaves=[];
+let fwT=0,fwN=0,celebrate=0,resetOnDay=0,ending=0,card=null,cardT=0;
+let gulls=[];for(let i=0;i<6;i++)gulls.push({a:i/6*Math.PI*2,r:28+(i%3)*9,ph:i*1.7,x:0,y:0,vx:0,vy:0,away:0});
+const perched=[{x:118,y:150,away:0,vx:0,vy:0},{x:150,y:150,away:0,vx:0,vy:0}];
+let gullScatter=0;
+const chicks=[{x:200,dir:1,st:0,t:0},{x:236,dir:-1,st:1,t:20}];
+const peng={t:60,fish:null,hold:0};
+const cat={t:0,meow:0,happy:0,fish:null};
+const mail={st:0,t:0,posted:0};
+const boat={x:14,mode:'moored',t:0,oar:0};
+const crab={x:76,dir:1,t:0};
+let wipe=null;
+const seabirds=[{a:0,cx:560,cy:156},{a:2.1,cx:600,cy:160},{a:4.2,cx:520,cy:164}];
+let seed=12345;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+const STARS=[];for(let i=0;i<64;i++)STARS.push({x:rnd()*W|0,y:rnd()*80|0,p:(rnd()*40)|0,b:rnd()<.25});
+const FLIES=[];for(let i=0;i<18;i++)FLIES.push({x:170+rnd()*720,y:0,p:rnd()*100,amp:6+rnd()*10});
+for(let i=0;i<110;i++)drops.push({x:rnd()*W,y:rnd()*H,v:4.5+rnd()*1.5});
+for(let i=0;i<80;i++)flakes.push({x:rnd()*W,y:rnd()*H,v:.35+rnd()*.4,p:rnd()*6.28,b:rnd()<.2});
+// ---------- 声音 ----------
+let AC=null,MG=null,noiseB=null,bgmOn=false,nextNote=0,noteI=0,rainG=null,waveG=null;
+function loopNoise(type,f,q){const s=AC.createBufferSource();s.buffer=noiseB;s.loop=true;const fl=AC.createBiquadFilter();fl.type=type;fl.frequency.value=f;if(q)fl.Q.value=q;const g=AC.createGain();g.gain.value=0;s.connect(fl);fl.connect(g);g.connect(MG);s.start();return g}
+function audioInit(){if(AC)return;try{AC=new (window.AudioContext||window.webkitAudioContext)();MG=AC.createGain();MG.gain.value=muted?0:.5;MG.connect(AC.destination);
+ noiseB=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate);const d=noiseB.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+ rainG=loopNoise('highpass',1800);waveG=loopNoise('lowpass',420);bgmOn=true;nextNote=AC.currentTime+.1;setInterval(sched,60)}catch(e){AC=null}}
+function tone(f,d,type,v,when,f2){if(!AC)return;const t=AC.currentTime+(when||0);const o=AC.createOscillator(),g=AC.createGain();o.type=type||'square';o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v||.05,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g);g.connect(MG);o.start(t);o.stop(t+d+.02)}
+function noise(d,v,when,fc){if(!AC)return;const t=AC.currentTime+(when||0);const s=AC.createBufferSource();s.buffer=noiseB;const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=fc||1200;const g=AC.createGain();g.gain.setValueAtTime(v||.1,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);s.connect(f);f.connect(g);g.connect(MG);s.start(t);s.stop(t+d)}
+const SFX={
+ pick(){[988,1319,1568,2093].forEach((f,i)=>tone(f,.12,'square',.04,i*.06))},
+ jump(){tone(330,.14,'square',.035,0,660)},land(){noise(.05,.05,0,600)},step(){tone(140,.03,'triangle',.03)},
+ door(){tone(220,.08,'triangle',.06);tone(165,.12,'triangle',.06,.08)},
+ peek(f){tone(f,.07,'square',.035,.15);tone(f*1.26,.09,'square',.035,.23)},
+ gull(){for(let i=0;i<4;i++)tone(1400-i*90,.09,'square',.025,i*.07,900)},
+ light(on){tone(on?660:440,.1,'sine',.06);tone(on?990:330,.16,'sine',.05,.08)},
+ sun(){[523,659,784].forEach((f,i)=>tone(f,.18,'triangle',.05,i*.07))},
+ launch(){noise(.35,.04,0,3000);tone(200,.35,'triangle',.02,0,900)},
+ boom(){noise(.6,.16,0,900);tone(90,.3,'square',.04,0,40)},pop(){tone(900,.05,'square',.04,0,300);noise(.08,.05,0,4000)},
+ meow(){tone(700,.25,'triangle',.05,0,450)},cluck(){tone(600,.05,'square',.03);tone(500,.06,'square',.03,.07)},
+ happy(){tone(784,.1,'square',.04);tone(1047,.14,'square',.04,.1)},oops(){tone(500,.14,'square',.04,0,300)},
+ sneeze(){tone(900,.06,'square',.03,0,1400);noise(.18,.12,.08,2500)},talk(){for(let i=0;i<3;i++)tone(520+((i*137)%5)*60,.04,'square',.025,i*.06)},
+ row(){noise(.12,.05,0,700)},mail(){tone(660,.06,'square',.04);tone(880,.06,'square',.04,.07);tone(1320,.12,'square',.04,.14)},
+ wx(){[392,523,659,523].forEach((f,i)=>tone(f,.1,'triangle',.04,i*.05))},lamp(){tone(1200,.05,'square',.03);tone(1800,.08,'sine',.04,.05)},
+ spin(){[523,659,784,1047,784,1047].forEach((f,i)=>tone(f,.07,'square',.03,i*.05))},
+ win(){[523,659,784,1047,0,784,1047,1319].forEach((f,i)=>f&&tone(f,.2,'square',.04,i*.11))}};
+// 白天曲（C 大调 96bpm）与夜曲（A 小调 72bpm 摇篮曲）
+const DMEL=[72,76,79,76,74,72,69,72, 74,77,81,79,76,74,72,0, 72,76,79,84,81,79,76,74, 72,74,76,79,74,72,72,0];
+const DBAS=[48,0,55,0,45,0,52,0, 50,0,57,0,43,0,55,0, 48,0,55,0,53,0,52,0, 50,0,55,0,48,0,48,0];
+const NMEL=[69,0,72,76, 74,0,72,71, 69,0,64,67, 69,0,0,0, 72,0,76,79, 77,76,74,72, 71,0,67,71, 69,0,0,0];
+const NBAS=[45,52,57,52, 41,48,53,48, 43,50,55,50, 45,52,57,52, 41,48,53,48, 38,45,50,45, 40,47,52,47, 45,52,57,52];
+function mtof(m){return 440*Math.pow(2,(m-69)/12)}
+function sched(){if(!AC||!bgmOn)return;const nt=phase==='night'||phase==='dusk';const step=nt?60/72/2:60/96/2;while(nextNote<AC.currentTime+.25){const i=noteI%32,w=nextNote-AC.currentTime;
+ if(nt){if(NMEL[i])tone(mtof(NMEL[i]),step*2.2,'triangle',.035,w);if(NBAS[i])tone(mtof(NBAS[i]),step*.9,'square',.009,w)}
+ else{if(DMEL[i])tone(mtof(DMEL[i]),step*1.6,'triangle',.03,w);if(DBAS[i])tone(mtof(DBAS[i]),step*1.8,'square',.012,w);if(i%4===2)noise(.03,.015,w,6000)}
+ nextNote+=step;noteI++}}
+function updateAmb(){if(!AC)return;const t=AC.currentTime;rainG.gain.setTargetAtTime(weather==='rain'?.09:0,t,.4);waveG.gain.setTargetAtTime(.025+.035*(.5+.5*Math.sin(T/60)),t,.3)}
+// ---------- 时段 ----------
+function phaseOf(m){m=((m%1440)+1440)%1440;if(m>=300&&m<420)return'dawn';if(m>=420&&m<1020)return'day';if(m>=1020&&m<1170)return'dusk';return'night'}
+function retarget(){palFrom=palCur.map(c=>c.slice());palTo=wxPal(PALS[phase],weather);palK=0;palT=0}
+function setPhase(p){if(p===phase)return;phase=p;retarget();
+ if((p==='dawn'||p==='day')&&resetOnDay){ITEMS.forEach(i=>i.got=0);resetOnDay=0;ending=0}}
+function nextPhase(){const st={dawn:420,day:1020,dusk:1170,night:300+1440};let m=st[phase];if(phase!=='night'&&m<gm%1440)m+=1440;gm=Math.floor(gm/1440)*1440+(phase==='night'?(gm%1440>=1170?1440+300:300):m);setPhase(phaseOf(gm))}
+function setWeather(w){weather=w;retarget();showToast(TXT[w]);SFX.wx();if(w==='rain')for(let i=0;i<4;i++)ripples.push({x:0,y:0,l:0})}
+function cycleWeather(){const L=['sun','rain','snow','fog'];setWeather(L[(L.indexOf(weather)+1)%4])}
+function showToast(s){toast=s;toastT=48}
+// ---------- 对白 ----------
+function say(x,y,text,t){for(let i=says.length-1;i>=0;i--)if(Math.abs(says[i].x-x)<30&&Math.abs(says[i].y-y)<30)says.splice(i,1);says.push({x,y,text,t:t||70,sc:scene});SFX.talk()}
+function bubble(kind,t){fox.bub=kind;fox.bubT=t||40}
+function emote(e,t){fox.emo=e;fox.emoT=t;fox.idle=0}
+function walkThen(x,fn){x=Math.max(gx0(),Math.min(gx1(),x));if(Math.abs(x-fox.x)<3&&!fox.air){fox.tx=null;fn&&fn();return}fox.tx=x;fox.cb=fn||null;fox.run=Math.abs(x-fox.x)>110?1:0;fox.idle=0;fox.emo=null;fox.emoT=0}
+const gx0=()=>scene==='island'?66:74,gx1=()=>scene==='island'?252:914;
+// ---------- 交互 ----------
+function sunPos(){if(phase==='night')return[214,30,8];if(phase==='dusk')return[232,76,13];if(phase==='dawn')return[64,76,12];return[206,28,10]}
+const UI={mute:[W-15,3,12,10],wx:[W-29,3,12,10],map:[W-75,16,72,20]};
+const inR=(x,y,r)=>x>=r[0]&&x<r[0]+r[2]&&y>=r[1]&&y<r[1]+r[3];
+function click(sx,sy){audioInit();const wx=sx+Math.round(camX);
+ if(card){if(cardT>20){card=null;}return'card'}
+ if(wipe)return'wipe';
+ if(inR(sx,sy,UI.mute)){muted=!muted;if(MG)MG.gain.value=muted?0:.5;return'mute'}
+ if(inR(sx,sy,UI.wx)){cycleWeather();return'weather'}
+ if(inR(sx,sy,UI.map)){if(scene==='village'&&!fox.inBoat){const mx=(sx-UI.map[0]-3)/66*WW;walkThen(mx,null)}return'map'}
+ const[spx,spy,sr]=sunPos();if((sx-spx)**2+(sy-spy)**2<=(sr+4)**2){nextPhase();SFX.sun();return'sun'}
+ for(const c of CLOUDS)if((!c.extra||weather!=='sun')&&sx>=c.rx&&sx<c.rx+c.s.w&&sy>=c.ry+4&&sy<c.ry+c.s.h){cycleWeather();return'cloud'}
+ if(fox.inBoat)return'busy';
+ for(const g of gulls)if(!g.away&&Math.abs(wx-g.x)<8&&Math.abs(sy-g.y)<6){scatter();return'gulls'}
+ if(scene==='island')return clickIsland(sx,sy,wx);
+ for(const g of perched)if(!g.away&&Math.abs(wx-g.x-2)<5&&Math.abs(sy-g.y-2)<5){scatter();say(g.x+2,g.y-2,TXT.gull,40);return'gulls'}
+ // 小船
+ if(wx>=boat.x-2&&wx<=boat.x+34&&sy>=158&&sy<=180&&boat.mode==='moored'){walkThen(80,()=>boardBoat());say(fox.x,fox.y-34,TXT.boat,50);return'boat'}
+ // 企鹅
+ if(Math.abs(wx-86)<8&&sy>=146&&sy<=164){if(peng.hold){walkThen(100,()=>{peng.hold=0;fox.carry='fish';fox.face=-1;say(86,146,TXT.pengGive,70);emote('happy',24);SFX.pick()})}else say(86,146,fox.carry?TXT.pengHas:TXT.pengWait,60);return'peng'}
+ // 灯塔
+ if(wx>=LH.x-2&&wx<=LH.x+LH.w+2&&sy>=LH.base-LH.h-14&&sy<=LH.base){beam=!beam;SFX.light(beam);return'beam'}
+ // 猫
+ const ci=HOUSES[4],cx=ci.x+ci.w/2,cy=ci.base-ci.wh-ci.rh-11;if(Math.abs(wx-cx)<8&&sy>cy-4&&sy<cy+14){
+  if(fox.carry==='fish'){walkThen(cx-14,()=>{fox.face=1;fox.carry=null;cat.fish={t:0,x0:fox.x+6,y0:fox.y-20,x1:cx,y1:cy+4};emote('happy',30);SFX.jump()})}
+  else{cat.meow=30;SFX.meow();say(cx,cy-2,peng.hold?TXT.catWant:TXT.cat,50)}return'cat'}
+ // 路灯
+ for(const L of LAMPS){const g=gyV(L.x);if(Math.abs(wx-L.x-1)<6&&sy>=g-40&&sy<=g-4){L.on=!L.on;SFX.lamp();if(L.on){for(let i=0;i<8;i++)sparks.push({x:L.x+1,y:g-33,vx:Math.cos(i/8*6.28)*1,vy:Math.sin(i/8*6.28)*1,l:12,c:C.lit})}return'lamp'}}
+ // 邮筒
+ {const mg=gyV(404);if(wx>=398&&wx<=412&&sy>=mg-26&&sy<=mg-4){mailClick();return'mail'}}
+ for(const h of HOUSES)if(wx>=h.x-3&&wx<h.x+h.w+3&&sy>=h.base-h.wh-h.rh&&sy<=h.base){if(!h.door){h.door=1;h.dt=0;SFX.door();SFX.peek(500+HOUSES.indexOf(h)*90);say(h.dx+6,h.base-h.dh-8,TXT[h.an],90)}return'house'}
+ for(const c of chicks)if(Math.abs(wx-c.x)<6&&Math.abs(sy-(gyV(c.x)-5))<6){c.st=3;c.t=0;SFX.cluck();say(c.x,gyV(c.x)-12,TXT.chick,30);return'chick'}
+ if(clickFox(wx,sy))return'fox';
+ if(sy<64){skyBurst(sx,sy);return'sky'}
+ walkThen(wx,null);return'walk'}
+function clickFox(wx,sy){if(Math.abs(wx-fox.x)<11&&sy>fox.y-30&&sy<fox.y+2){
+  if(fox.emo==='sleep'||fox.idle>24*10){emote('surprised',20);bubble('!',24);SFX.oops()}
+  else{fox.clicks=fox.clickT>0?fox.clicks+1:1;fox.clickT=60;if(fox.clicks>=3){emote('shy',40);say(fox.x,fox.y-32,TXT.foxShy,50);fox.clicks=0}else{emote('wave',36);say(fox.x,fox.y-32,TXT.fox,36);SFX.happy()}}return true}return false}
+function clickIsland(sx,sy,wx){
+ if(wx>=boat.x-2&&wx<=boat.x+34&&sy>=158&&sy<=180&&boat.mode==='moored'){walkThen(250,()=>boardBoat());say(fox.x,fox.y-34,TXT.boatBack,50);return'boat'}
+ if(Math.abs(wx-crab.x-4)<7&&sy>=gyI(crab.x)-10&&sy<=gyI(crab.x)+2){crab.t=-30;say(crab.x+4,gyI(crab.x)-8,TXT.crab,50);return'crab'}
+ if(clickFox(wx,sy))return'fox';
+ if(sy<64){skyBurst(sx,sy);return'sky'}
+ walkThen(wx,null);return'walk'}
+function mailClick(){const L=ITEMS[1];const mg=gyV(404);
+ if(mail.posted){say(405,mg-28,TXT.mailDone,50);return}
+ if(!L.got){say(405,mg-28,TXT.mailNo,60);bubble('?',30);return}
+ walkThen(392,()=>{fox.face=1;mail.st=1;mail.t=0;SFX.mail();say(405,mg-28,TXT.mailPost,40)})}
+function skyBurst(sx,sy){const x=sx+Math.round(camX);if(phase==='night'||phase==='dusk'){fw.push({x,y:150,vy:-3.2,c:[C.lit,C.pink,C.seaL,C.glow1,C.grL,C.foam][fwN++%6],fuse:Math.max(14,Math.round((150-sy)/3.1)),tx:sy});SFX.launch()}
+ else{SFX.pop();for(let i=0;i<28;i++){const a=rnd()*6.28,s=1+rnd()*2.2;confetti.push({x,y:sy,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1.2,c:BALLOON[i%5],l:70+rnd()*30|0,p:i})}for(let i=0;i<3;i++)balloons.push({x:x-14+i*14,y:H+8+i*10,c:BALLOON[(fwN+i)%5],p:rnd()*6})}}
+function scatter(){gullScatter=170;SFX.gull();for(const g of gulls.concat(perched)){g.away=1;const a=-Math.PI/2+(rnd()-.5)*2.4;g.vx=Math.cos(a)*(1.6+rnd());g.vy=Math.sin(a)*(1.2+rnd()*.8)-.4}}
+function boardBoat(){fox.inBoat=1;fox.air=0;fox.tx=null;boat.mode='out';boat.t=0;fox.face=scene==='village'?-1:1;SFX.jump()}
+// 指针：点按 + 拖动（手机可玩）
+let drag=null;
+function evPos(e){const r=cv.getBoundingClientRect();return[Math.floor((e.clientX-r.left)/r.width*W),Math.floor((e.clientY-r.top)/r.height*H)]}
+cv.addEventListener('pointerdown',e=>{const[x,y]=evPos(e);drag={x,y,moved:0};const r=click(x,y);drag.kind=r;try{cv.setPointerCapture(e.pointerId)}catch(_){}});
+cv.addEventListener('pointermove',e=>{if(!drag)return;const[x,y]=evPos(e);if(Math.abs(x-drag.x)+Math.abs(y-drag.y)>4)drag.moved=1;if(drag.moved&&(drag.kind==='walk'||drag.kind==='map')&&!fox.inBoat&&!wipe){if(drag.kind==='map'){walkThen((x-UI.map[0]-3)/66*WW,null)}else walkThen(x+Math.round(camX),null)}});
+window.addEventListener('pointerup',()=>drag=null);
+// ---------- 逻辑 ----------
+function tick(){T++;gm+=1/4;setPhase(phaseOf(gm));
+ if(palK<4&&++palT%5===0){palK++;const k=palK/4;for(let i=1;i<33;i++)for(let c=0;c<3;c++)palCur[i][c]=Math.round(palFrom[i][c]+(palTo[i][c]-palFrom[i][c])*k);bakePal()}
+ if(T%12===0)updateAmb();
+ if(toastT>0)toastT--;
+ // 天气累积
+ if(weather==='snow')snowAcc=Math.min(1,snowAcc+1/420);else snowAcc=Math.max(0,snowAcc-1/600);
+ if(weather==='rain')rainAcc=Math.min(1,rainAcc+1/150);else rainAcc=Math.max(0,rainAcc-1/300);
+ // 狐兔
+ const f=fox;let moving=false;
+ if(f.clickT>0)f.clickT--;
+ if(!f.inBoat){
+ if(f.tx!==null&&f.emoT<=0){const d=f.tx-f.x;if(Math.abs(d)<1.2){f.x=f.tx;f.tx=null;if(f.cb){const c=f.cb;f.cb=null;c()}}else{moving=true;const dir=Math.sign(d);f.face=dir;const sp=f.run?1.55:.85;f.x+=dir*Math.min(sp,Math.abs(d));
+   if(!f.air&&gy(f.x+dir*5)<f.y-2){f.air=1;f.vy=-2.7;SFX.jump()}}}
+ if(!f.air){const g=gy(f.x);if(g>f.y+1){f.air=1;f.vy=-.6}else f.y=g}
+ if(f.air){f.vy+=.28;f.y+=f.vy;const g=gy(f.x);if(f.vy>0&&f.y>=g){f.y=g;f.air=0;f.land=3;SFX.land()}}
+ }
+ if(f.land>0)f.land--;
+ if(moving){f.af+=f.run?.75:.5;if(Math.floor(f.af)%3===0&&Math.floor(f.af-(f.run?.75:.5))%3!==0)SFX.step()}
+ if(f.emoT>0){f.emoT--;if(!f.emoT)f.emo=null}
+ if(!moving&&!f.air&&f.emoT<=0&&!f.inBoat)f.idle++;else if(moving||f.air)f.idle=0;
+ if(moving)f.stretched=0;
+ if(f.idle===24*4&&!f.stretched&&weather!=='rain'){f.stretched=1;emote('stretch',30)}
+ if(f.bubT>0){f.bubT--;if(!f.bubT)f.bub=null}
+ if(f.idle>24*10&&!f.bub&&T%40===0)bubble('z',30);
+ // 雪天：呼白气、打喷嚏
+ if(weather==='snow'&&!f.inBoat){if(T%26===0&&f.emo!=='sleep'&&f.idle<24*10){const side=(f.tx!==null||f.air);breath.push({x:f.x+(side?f.face*12:0),y:f.y-15,l:0,d:side?f.face:0})}
+  if(!moving&&!f.air&&f.emoT<=0&&f.idle>30&&f.idle<24*5&&T%150===75){emote('sneeze',22);setTimeout(()=>{},0)}
+  if(f.emo==='sneeze'&&f.emoT===10){SFX.sneeze();for(let i=0;i<6;i++)breath.push({x:f.x+(i%3-1)*3,y:f.y-14,l:0,d:(i%3-1)*.6,big:1})}}
+ for(let i=breath.length-1;i>=0;i--){const b=breath[i];b.l++;if(b.l%3===0){b.y-=1;b.x+=b.d*.8}if(b.l>(b.big?24:18))breath.splice(i,1)}
+ // 拾取
+ for(const it of ITEMS)if(it.s===scene&&!it.got&&!f.inBoat&&Math.abs(f.x-it.x)<7&&Math.abs(f.y-(it.y+2))<10){it.got=1;bubble(it.k,40);SFX.pick();for(let i=0;i<10;i++)sparks.push({x:it.x,y:it.y-3,vx:Math.cos(i/10*6.28)*1.2,vy:Math.sin(i/10*6.28)*1.2-.4,l:14,c:C.lit});
+  showToast(TXT.got+' '+TXT[it.k]+'  '+ITEMS.filter(i=>i.got).length+'/8');
+  if(!f.tx||Math.abs(f.tx-f.x)<12){f.tx=null;f.cb=null;emote('happy',24)}
+  if(ITEMS.every(i=>i.got)&&!ending){celebrate=36;ending=1}}
+ if(celebrate>0&&--celebrate===0){gm=Math.floor(gm/1440)*1440+1250;setPhase('night');weather='sun';retarget();fwT=24*14;fwN=0;resetOnDay=1;emote('happy',60);LAMPS.forEach(l=>l.on=1);beam=1;cardT=0;card={t:0};SFX.win()}
+ if(card)cardT++;
+ if(ending&&phase==='night'&&T%5===0&&meteors.length<10)meteors.push({x:60+rnd()*300,y:-4+rnd()*30,v:2.2+rnd()*1.2,l:0,L:16+rnd()*10|0});
+ for(let i=meteors.length-1;i>=0;i--){const m=meteors[i];m.x-=m.v*1.4;m.y+=m.v*.7;if(++m.l>m.L)meteors.splice(i,1)}
+ if(fwT>0){fwT--;if(fwT%16===0||fwT%27===0){const x=Math.round(camX)+40+rnd()*240;fw.push({x,y:140,vy:-3.1-rnd()*.5,c:[C.lit,C.pink,C.seaL,C.glow1,C.grL,C.foam][fwN++%6],fuse:24+rnd()*10|0});SFX.launch()}
+  if(fwT%40===0&&!fox.air&&!fox.inBoat&&fox.emoT<=0){emote(fwT%80===0?'wave':'happy',36)}}
+ for(let i=fw.length-1;i>=0;i--){const r=fw[i];r.y+=r.vy;r.vy+=.045;if(--r.fuse<=0){fw.splice(i,1);SFX.boom();flash.push({x:r.x,y:r.y,l:4});const n=40;for(let k=0;k<n;k++){const a=k/n*6.283+rnd()*.08,s=(k%2?2.0:2.9)+rnd()*.3;sparks.push({x:r.x,y:r.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:44+rnd()*10|0,c:r.c,big:1})}}}
+ for(let i=sparks.length-1;i>=0;i--){const s=sparks[i];s.px=s.x;s.py=s.y;s.x+=s.vx;s.y+=s.vy;s.vx*=s.big?.93:.96;s.vy=s.vy*(s.big?.93:.96)+(s.big?.025:.08);if(--s.l<=0)sparks.splice(i,1)}
+ for(let i=confetti.length-1;i>=0;i--){const c=confetti[i];c.x+=c.vx;c.y+=c.vy;c.vx*=.94;c.vy=c.vy*.9+.12;c.x+=Math.sin((T+c.p*7)/6)*.3;if(--c.l<=0||c.y>H)confetti.splice(i,1)}
+ for(let i=balloons.length-1;i>=0;i--){const b=balloons[i];b.y-=.6;b.x+=Math.sin(T/20+b.p)*.25;if(b.y<-20)balloons.splice(i,1)}
+ // 烟
+ if(scene==='village'&&T%7===0)HOUSES.forEach((h,i)=>{if((T/7+i)%2<1){const cx=h.x+Math.round(h.w*h.chim);smoke.push({x:cx+1,y:h.base-h.wh-chimY(h)-10,vx:-.12-rnd()*.08,vy:-.28-rnd()*.1,l:0})}});
+ for(let i=smoke.length-1;i>=0;i--){const s=smoke[i];s.l++;if(s.l%2===0){s.x+=s.vx*2+(Math.sin((s.l+i)/7)*.3);s.y+=s.vy*2}if(s.l>58)smoke.splice(i,1)}
+ for(const h of HOUSES)if(h.door){h.dt++;if(h.dt===44&&Math.abs(fox.x-(h.dx+6))<70&&!fox.inBoat&&fox.tx===null)emote('shy',36);if(h.dt>120)h.door=0}
+ // 海鸥
+ if(gullScatter>0)gullScatter--;
+ gulls.forEach((g,i)=>{const cxg=scene==='island'?160:120;if(g.away){g.x+=g.vx;g.y+=g.vy;g.vy-=.01;if(gullScatter===0){const tx=cxg+Math.cos(T/90+g.a)*g.r*2.2,ty=46+Math.sin(T/90+g.a)*g.r*.35+Math.sin(T/20+g.ph)*2;g.x+=(tx-g.x)*.05;g.y+=(ty-g.y)*.05;if(Math.abs(tx-g.x)<2&&Math.abs(ty-g.y)<2)g.away=0}}
+  else{g.x=cxg+Math.cos(T/90+g.a)*g.r*2.2;g.y=46+Math.sin(T/90+g.a)*g.r*.35+Math.sin(T/20+g.ph)*2}});
+ perched.forEach(g=>{if(g.away){if(!g.ox){g.ox=g.x;g.oy=g.y}g.x+=g.vx;g.y+=g.vy;if(gullScatter===0){g.x+=(g.ox-g.x)*.08;g.y+=(g.oy-g.y)*.08;if(Math.abs(g.ox-g.x)<1&&Math.abs(g.oy-g.y)<1){g.away=0;g.x=g.ox;g.y=g.oy}}}});
+ seabirds.forEach(b=>b.a+=.035);
+ chicks.forEach(c=>{c.t++;if(c.st===0){c.x+=c.dir*.35;if(c.x<190||c.x>250||rnd()<.006)c.dir*=-1;if(c.t>50){c.st=1;c.t=0}}else if(c.st===1){if(c.t>36){c.st=rnd()<.5?0:2;c.t=0}}else if(c.st===2){if(c.t>30){c.st=0;c.t=0}}else if(c.st===3){if(c.t>22){c.st=0;c.t=0;c.dir*=-1}}});
+ crab.t++;if(crab.t>0){if(crab.t%3===0)crab.x+=crab.dir*.7;if(crab.x<64||crab.x>96)crab.dir*=-1}
+ // 企鹅钓鱼：咬钩 → 鱼跃 → 举着鱼等狐兔来拿
+ if(!peng.hold){peng.t=(peng.t+1)%220;if(peng.t===180){peng.fish={t:0};for(let i=0;i<6;i++)splash.push({x:56,y:173,vx:(rnd()-.5)*1.4,vy:-1-rnd(),l:16})}}
+ if(peng.fish&&++peng.fish.t>26){peng.fish=null;if(!fox.carry)peng.hold=1}
+ for(let i=flash.length-1;i>=0;i--)if(--flash[i].l<=0)flash.splice(i,1);
+ for(let i=splash.length-1;i>=0;i--){const s=splash[i];s.x+=s.vx;s.y+=s.vy;s.vy+=.15;if(--s.l<=0)splash.splice(i,1)}
+ if(cat.meow>0)cat.meow--;if(cat.happy>0)cat.happy--;
+ if(cat.fish){cat.fish.t++;if(cat.fish.t>=20){cat.fish=null;cat.happy=72;SFX.spin();const ci=HOUSES[4];say(ci.x+ci.w/2,ci.base-ci.wh-ci.rh-14,TXT.catFish,70)}}
+ // 邮筒：投信 → 旗子竖起 → 信鸽送回信 → 回信卡片
+ if(mail.st){mail.t++;if(mail.st===1&&mail.t>14){mail.st=2;mail.t=0}else if(mail.st===2&&mail.t>110){mail.st=3;mail.t=0;mail.posted=1;bubble('letter',50);emote('happy',30);SFX.pick();card={mail:1,t:0};cardT=0}else if(mail.st===3&&mail.t>10)mail.st=0}
+ // 雨：落地水花 + 屋檐滴水
+ if(weather==='rain'){for(const d of drops){d.y+=d.v;d.x-=d.v*.25;const wx=d.x+camX;const gyv=landAt(wx);if(d.y>=gyv){if(rnd()<.5)splash.push({x:wx,y:gyv-1,vx:(rnd()-.5)*.8,vy:-.6-rnd()*.5,l:5,rain:1});d.y=-rnd()*20;d.x=rnd()*(W+40)}if(d.x<-4)d.x+=W+40}
+  if(scene==='village'&&T%5===0){const h=HOUSES[(T/5|0)%HOUSES.length];const side=(T/30|0)%2;eaves.push({x:side?h.x+h.w+4:h.x-5,y:h.base-h.wh+1,vy:0,g:h.base})}}
+ else for(const d of drops){d.y=-rnd()*H}
+ for(let i=eaves.length-1;i>=0;i--){const e=eaves[i];e.vy+=.25;e.y+=e.vy;if(e.y>=e.g+6){splash.push({x:e.x,y:e.g+5,vx:-.5,vy:-.8,l:5,rain:1},{x:e.x,y:e.g+5,vx:.5,vy:-.8,l:5,rain:1});eaves.splice(i,1)}}
+ if(weather==='snow')for(const s of flakes){s.y+=s.v;s.x+=Math.sin(T/30+s.p)*.3-.1;if(s.y>landAt(s.x+camX)){s.y=-2;s.x=rnd()*W}if(s.x<0)s.x+=W}
+ for(let i=says.length-1;i>=0;i--)if(--says[i].t<=0)says.splice(i,1);
+ // 小船
+ boatTick();
+ if(wipe){wipe.t++;if(wipe.t===wipe.dur>>1&&wipe.mid)wipe.mid();if(wipe.t>=wipe.dur)wipe=null}
+ // 相机
+ if(scene==='island')camX=0;else{const fx=fox.inBoat?boat.x+15:fox.x;const tgt=Math.max(0,Math.min(WW-W,fx-150));camX+=(tgt-camX)*.06}
+}
+function landAt(wx){if(scene==='island'){if(wx>=60&&wx<258)return gyI(wx)-1;return 172}if(wx>=70&&wx<920)return gyV(wx)-2;return 174}
+function boatTick(){const dock=scene==='village'?14:258;boat.oar=0;
+ if(boat.mode==='out'){boat.t++;if(boat.t>10){const dir=scene==='village'?-1:1;boat.x+=dir*1.4;boat.oar=1;if(boat.t%12===0)SFX.row();if((scene==='village'&&boat.x<-46)||(scene==='island'&&boat.x>330)){if(!wipe){wipe={t:0,dur:30,mid:()=>{scene=scene==='village'?'island':'village';boat.x=scene==='island'?340:-56;camX=0;boat.mode='in';fox.face=scene==='village'?1:-1;showToast(TXT[scene]);says.length=0}}}}}}
+ else if(boat.mode==='in'){const d=dock-boat.x;if(Math.abs(d)<1){boat.x=dock;boat.mode='land';boat.t=0}else{boat.x+=Math.sign(d)*Math.min(1.4,Math.abs(d));boat.oar=1;if(T%12===0)SFX.row()}}
+ else if(boat.mode==='land'){boat.t++;if(boat.t===6){fox.inBoat=0;fox.x=scene==='village'?80:250;fox.y=gy(fox.x)-6;fox.air=1;fox.vy=-1.5;SFX.jump();boat.mode='moored';emote('happy',20)}}
+ if(fox.inBoat){fox.x=boat.x+15;fox.y=boatY()-3}}
+function boatY(){return 171+((T>>4)%2)}
+function chimY(h){return Math.round(h.rh*(1-Math.abs(h.chim-.5)*2))-2}
+// ---------- 绘制 ----------
+const night=()=>phase==='night',warm=()=>phase==='night'||phase==='dusk';
+const dark=()=>warm()||weather==='rain'||weather==='fog';
+function drawSky(){const b=[[0,28,C.sk0],[28,48,C.sk1],[48,68,C.sk2],[68,HOR,C.sk3]];for(const[a,z,c]of b)buf.fill(c,a*W,z*W);
+ for(let k=1;k<b.length;k++){const y=b[k][0];for(let x=0;x<W;x++){const s=((x+k*7)>>3)%3;if(s===0)buf[(y-1)*W+x]=b[k][2];if(s===1&&((x>>3)&1))buf[(y-1)*W+x]=b[k][2]}}}
+function drawStars(){if(!night()||weather==='rain'||weather==='fog')return;OX=0;for(const s of STARS){const t=((T>>2)+s.p)%40;if(t<2)continue;if(s.b&&t>30&&t<34){px(s.x,s.y,C.foam);px(s.x-1,s.y,C.cl);px(s.x+1,s.y,C.cl);px(s.x,s.y-1,C.cl);px(s.x,s.y+1,C.cl)}else px(s.x,s.y,s.b?C.foam:C.cl)}}
+function drawMeteors(){OX=0;for(const m of meteors){const len=Math.min(m.l*2,16);for(let i=0;i<len;i++){const x=Math.round(m.x+i*2),y=Math.round(m.y-i);px(x,y,i<3?C.foam:(i<8?C.lit:(i<12?C.cl:C.cls)));if(i<5)px(x,y+1,i<2?C.foam:C.cl)}if(m.l<3){px(m.x-1,m.y,C.foam);px(m.x,m.y+2,C.lit)}}}
+function drawSun(){OX=0;const[x,y,r]=sunPos();if(weather!=='sun'){if(phase!=='night')disc(x,y,r,C.cl);return}
+ if(phase==='night'){disc(x,y,r,C.foam);disc(x+4,y-2,r-1,C.sk0);px(x-4,y+1,C.cl);px(x-3,y+4,C.cl);return}
+ if(phase==='dusk'){disc(x,y,r+4,C.sk3);disc(x,y,r+2,C.peach)}
+ if(phase==='dawn')disc(x,y,r+3,C.sk3);
+ disc(x,y,r,C.glow1);disc(x,y,r-2,C.lit);disc(x-3,y-3,Math.max(2,r-7),C.cl)}
+function drawClouds(){OX=0;for(const c of CLOUDS){if(c.extra&&weather==='sun'){c.rx=-999;continue}let x=((c.x-camX*.08+T*c.sp)%(W+80)+W+80)%(W+80)-60;const y=c.y+(weather!=='sun'&&!c.extra?4:0);c.rx=Math.round(x);c.ry=y;blit(c.s,x,y)}}
+function drawMount(){
+ // 远山：中点位移脊线，阳坡亮面 + 锯齿雪线
+ OX=0;const ox=Math.round(camX*.06);for(let sx=0;sx<W;sx++){const i=(sx+ox)%512,h=MTF[i];if(h<2)continue;const top=HOR-h;const hl=MTF[(i+511)%512],hr=MTF[(i+1)%512];const snow=h-34+((hsh(i,5)%3))+((i>>2)%2);
+  for(let y=top;y<HOR;y++){const d=y-top;let c=C.mt1;if(hr<h&&d<4+(h>>3)&&hl<=h)c=C.mt1;if(hl<h&&hr>=h&&d<3)c=C.cls;if(h>34&&d<snow&&weather!=='fog')c=(hl<h||d<2)?C.foam:C.cls;buf[y*W+sx]=c}
+  if(hr<h&&hl<h&&h>18)buf[top*W+sx]=C.cls}
+ // 近岭：树线小三角
+ const ox2=Math.round(camX*.14);for(let sx=0;sx<W;sx++){const i=(sx+ox2)%512,h=MTN[i];if(h<2)continue;const top=HOR-h;for(let y=top;y<HOR;y++)buf[y*W+sx]=y===top&&MTN[(i+511)%512]<h?C.mt1:C.mt2;
+  const tr=hsh(i,9);if(tr%4===0&&weather!=='fog'){const th=3+(tr>>4)%3;for(let k=0;k<th;k++){const yy=top-th+k+1;if(yy>=0){buf[yy*W+sx]=C.seaD;if(k>th/2&&sx+1<W)buf[yy*W+sx+1]=C.seaD;if(k>th/2&&sx>0)buf[yy*W+sx-1]=C.seaD}}if(snowAcc>.3)buf[(top-th+1)*W+sx]=C.foam}}
+ // 远处小岛 + 小屋
+ OX=Math.round(camX*.3);for(const ix of [70,380,700]){for(let i=-26;i<=26;i++){const hh=Math.round(Math.sqrt(Math.max(0,1-(i/26)**2))*7);for(let y=HOR-hh;y<HOR;y++)px(ix+i,y,C.mt2)}
+  for(let k=0;k<3;k++){const hx=ix-9+k*7,hy=HOR-6-(k===1?2:0);rect(hx,hy,5,4,C.mt2);rect(hx+1,hy-1,3,1,C.mt2);px(hx+2,hy-2,C.mt2);px(hx+2,hy+1,warm()?C.lit:C.mt1)}}}
+function drawSea(){const top=HOR;for(let y=top;y<H;y++){const c=y===top?C.seaL:(y<150?C.sea:C.seaD);buf.fill(c,y*W,y*W+W)}
+ for(let y=104;y<150;y+=2)for(let x=0;x<W;x++)if(((x+((y*5)>>1))>>2)%9===0&&(y&3)===0)buf[y*W+x]=C.seaD;
+ const[spx]=sunPos();const cam=scene==='island'?T*.2:camX;
+ for(let y=top+2;y<H;y+=2){const depth=(y-top)/(H-top),ox=Math.round(cam*(.15+.85*depth));const cw=12+Math.round(depth*10);
+  for(let ci=Math.floor(ox/cw)-1;ci<=Math.floor((ox+W)/cw)+1;ci++){const hh=hsh(ci,y);if(hh%5>1)continue;const on=(((T>>2)+(hh>>4))%10);if(on>5)continue;const len=1+(hh>>8)%4+(on>2?1:0);const x=ci*cw-ox+(hh>>12)%cw;for(let i=0;i<len;i++)if(x+i>=0&&x+i<W)buf[y*W+x+i]=C.seaL}}
+ if(phase!=='day'&&weather==='sun')for(let i=0;i<14;i++){const y=top+2+i*3;if(y>=H)break;const w=Math.max(2,14-i)+((T>>3)+i)%3,x=spx-(w>>1)+(((T>>2)+i*3)%5>2?1:-1);const c=phase==='night'?C.foam:C.lit;if(((T>>2)+i)%6!==0)for(let k=0;k<w;k++)if(x+k>=0&&x+k<W&&((k+i)%5!==3))buf[y*W+x+k]=c}}
+const mkSail=mkspr(['..w....','..ww...','..www..','..wwww.','..wwwww','BBBBBBB','.BBBBB.'],0);
+function drawSail(){OX=Math.round(camX*.3);const x=((T*.05)%(WW+60))+20;blit(mkSail,x,HOR+3)}
+// 灯塔光束：像素透视锥（外/内两阶），扫过海面时浪尖亮点
+function drawBeam(){if(!beam||!dark()||scene!=='village')return;OX=0;const lx=LH.x+LH.w/2-Math.round(camX),ly=LH.base-LH.h-10;const a=T/34;const s=Math.sin(a),c=Math.cos(a);
+ // c>0 远离观众：光束压向地平线、变窄；c<0 朝向观众：变宽变短（大部分被村子挡住）
+ const len=Math.round(40+150*Math.abs(s)+30*Math.max(0,c));const ex=lx+s*len,ey=Math.max(ly+4,HOR-2+Math.round(Math.max(0,-c)*70)-Math.round(c*6));
+ const wEnd=3+Math.round(16*(1-c)/2+6*Math.abs(s));const n=Math.max(1,Math.round(Math.hypot(ex-lx,ey-ly)));
+ const nx=-(ey-ly)/n,ny=(ex-lx)/n;
+ for(let i=6;i<=n;i++){const t=i/n,cx=lx+(ex-lx)*t,cy=ly+(ey-ly)*t,hw=1+wEnd*t;for(let k=-Math.ceil(hw);k<=Math.ceil(hw);k++){const X=Math.round(cx+nx*k),Y=Math.round(cy+ny*k);if(X<0||Y<0||X>=W||Y>=H)continue;const inner=Math.abs(k)<=hw*.4;const v=buf[Y*W+X];
+   if(Y>=HOR){if(v===C.seaL)buf[Y*W+X]=C.foam;else if(inner&&((X+Y*3+(T>>1))%7===0))buf[Y*W+X]=C.seaL}
+   else if(v!==C.foam&&v!==C.lit)buf[Y*W+X]=inner?C.cl:C.cls}}}
+function drawLighthouse(){const{x,w,base,h}=LH;const top=base-h;
+ for(let y=top;y<base;y++){const t=(y-top)/h,ww=Math.round(18+(w-18)*t),xx=x+Math.round((w-ww)/2);const band=Math.floor((y-top)/11)%2;
+  rect(xx,y,ww,1,band?C.roR:C.foam);rect(xx+ww-4,y,4,1,band?C.roD:C.cls);px(xx-1,y,C.ink);px(xx+ww,y,C.ink);if((y-top)%11===0)rect(xx,y,ww,1,band?C.roD:C.cls)}
+ rect(x+10,base-16,10,16,C.ink);rect(x+11,base-15,8,15,C.woM);for(let i=0;i<3;i++)rect(x+12+i*2+ (i>1?1:0),base-14,1,13,C.woD);rect(x+11,base-15,8,1,C.woD);px(x+17,base-8,C.lit);
+ for(const wy of[top+18,top+42]){rect(x+12,wy,5,7,C.ink);rect(x+13,wy+1,3,5,dark()?C.lit:C.sk2);rect(x+13,wy+3,3,1,C.ink)}
+ rect(x-2,top-2,w+4,2,C.ink);for(let i=0;i<w+2;i+=3)rect(x-1+i,top-6,1,4,C.ink);rect(x-2,top-7,w+4,1,C.ink);
+ rect(x+5,top-18,w-10,11,C.ink);const lit=beam?(T>>2)%2?C.lit:C.foam:C.sk2;rect(x+6,top-17,w-12,9,lit);rect(x+w/2,top-17,1,9,C.ink);
+ if(beam&&dark()){rect(x+4,top-19,w-8,1,C.glow1);px(x+4,top-18,C.glow1);px(x+w-5,top-18,C.glow1)}
+ for(let k=0;k<6;k++)rect(x+5+k,top-19-k,w-10-2*k,1,k===0?C.roD:C.roR);rect(x+w/2,top-27,1,3,C.ink);
+ if(snowAcc>.2){rect(x+7,top-24,w-14,1,C.foam);rect(x+9,top-25,w-18,1,C.foam)}
+ rect(x-4,base,w+8,3,C.clM);rect(x-4,base,w+8,1,C.stone)}
+// 地形 + 崖面细节（石缝、苔藓、洞穴、鸟巢、泉水、瀑布）
+function drawTerrain(){OX=Math.round(camX);for(let sx=0;sx<W;sx++){const x=sx+OX;if(x<160||x>=920)continue;const g=gyV(x);
+  const pathT=g-5,pathB=g+1;
+  for(let y=g-8;y<pathT;y++){let c=y===g-8?C.grL:C.gr;if(snowAcc>0&&(y-(g-8))<1+snowAcc*2&&hsh(x,y)%100<snowAcc*120)c=C.foam;buf[y*W+sx]=c}
+  for(let y=pathT;y<=pathB;y++){const row=Math.floor((y-pathT)/3.5);const off=(row*4+(Math.floor(g/6))*3);let c=C.stone;if((x+off)%9===0)c=C.clM;if(y===pathT+3)c=C.clM;if(y===pathT&&(x+off)%9===4)c=C.cl;if(rainAcc>.2&&y===pathT+1&&(x+off)%9>1&&(x+off)%9<5&&hsh(x>>2,y)%3===0)c=C.seaL;if(snowAcc>.5&&y===pathT&&hsh(x,4)%3)c=C.foam;buf[y*W+sx]=c}
+  buf[(pathB+1)*W+sx]=C.grD;buf[(pathB+2)*W+sx]=C.grD;if(hsh(x,3)%4===0)buf[(pathB+3)*W+sx]=C.grD;
+  const base=pathB+3;for(let y=base;y<H;y++){const yy=y-base,ri=Math.floor(yy/6),ly=yy%6;const off=hsh(ri,7)%11;const bx=Math.floor((x+off+ri*5)/11),lx=(x+off+ri*5)%11,bid=hsh(bx,ri+31);
+   let c=C.clM;if(ly===5||lx===0)c=C.clD;else if(bid%5===0)c=(ly===0?C.clM:C.clD);else if(ly===0&&lx>1)c=bid%2?C.stone:C.clM;else if(lx===10)c=C.clD;
+   // 苔藓：石块顶部 1–2 行 + 垂滴
+   if(bid%4===1&&(ly===0||(ly===1&&lx%3!==0)||(ly===2&&lx===4)))c=ly===0?C.gr:C.grD;
+   // 裂缝
+   if(bid%13===3&&Math.abs(lx-ly-2)<1&&ly<5)c=C.ink;
+   if(yy===0||yy===1&&hsh(x,1)%3===0)c=yy===0?C.grD:c;
+   buf[y*W+sx]=c}
+  const vh=hsh(x,77);if(vh%23===0){const L=4+(vh>>6)%12;for(let j=0;j<L;j++){const yy=base+j;if(yy>=H)break;const xs=sx+((j>>2)%2&&((vh>>3)&1)?1:0);if(xs<W)buf[yy*W+xs]=j%3===2?C.gr:C.grD;if(j%3===1&&xs+1<W)buf[yy*W+xs+1]=C.gr;if(j===L-1&&(vh>>9)%3===0&&xs<W)buf[yy*W+xs]=C.pink}}
+  const gl=gyV(x-1),gr2=gyV(x+1);if(gl>g&&x>160){for(let y=g-8;y<gl+2;y++)buf[y*W+sx]=y<g-5?C.grD:C.ink}if(gr2>g&&x<919)for(let y=g-8;y<gr2+2;y++)buf[y*W+sx]=C.ink}
+ // 崖壁小木门
+ {const dx=270,dy=160;for(let j=0;j<16;j++){const hw=j<3?[2,4,5][j]:6;rect(dx-hw,dy+j,hw*2,1,j<1?C.ink:C.woM)}for(let j=0;j<16;j++){px(dx-7,dy+j,C.ink);px(dx+6,dy+j,C.ink)}rect(dx-1,dy+1,1,15,C.woD);rect(dx+3,dy+3,1,12,C.woD);rect(dx-4,dy+3,1,12,C.woD);rect(dx-3,dy+5,2,2,dark()?C.lit:C.sk2);px(dx+1,dy+9,C.lit);
+  rect(dx+9,dy+2,3,4,C.ink);rect(dx+10,dy+3,1,2,dark()?C.lit:C.sk2)}
+ // 海蚀洞（夜里两只发光眼）
+ {const cx=352,cy=166;for(let j=0;j<16;j++){const hw=j<4?[3,5,6,7][j]:8;rect(cx-hw,cy+j,hw*2,1,C.ink);px(cx-hw-1,cy+j,C.clD);px(cx+hw,cy+j,C.clD)}for(let i=-6;i<6;i+=3)px(cx+i,cy+1+(i&1),C.grD);rect(cx-9,cy-1,18,1,C.gr);px(cx-7,cy,C.grD);px(cx+5,cy,C.grD);px(cx+6,cy+1,C.grD);
+  if(night()&&(T%90)>6){px(cx-3,cy+8,C.lit);px(cx+2,cy+8,C.lit)}else{px(cx-2,cy+12,C.stone);px(cx-1,cy+12,C.clM)}}
+ // 鸟巢岩架 + 雏鸟
+ {const nx=560,ny=162;rect(nx-10,ny,22,3,C.stone);rect(nx-10,ny+3,22,1,C.clD);px(nx-11,ny+1,C.ink);
+  rect(nx-6,ny-3,14,3,C.woM);for(let i=0;i<14;i+=2)px(nx-6+i,ny-3+(i%4?0:1),C.woD);rect(nx-7,ny-1,16,1,C.woD);
+  const bb=(T>>3)%2;for(const[k,dx]of[[0,-3],[1,3]]){const by=ny-6-((bb+k)%2);rect(nx+dx-1,by,3,3,C.foam);px(nx+dx-1,by,C.ink);px(nx+dx+2,by+1,C.glow1);if((T%60)<20&&k===0){px(nx+dx+2,by,C.glow1);px(nx+dx+3,by+1,C.glow1)}}}
+ // 崖缝小泉
+ {const fx=486,fy=154;rect(fx-2,fy-1,4,2,C.ink);for(let y=fy;y<H;y++){const ph=((y+(T>>1))>>1)%3;px(fx,y,ph===0?C.foam:C.seaL);px(fx+1,y,ph===1?C.foam:C.sea)}for(let i=0;i<4;i++)px(fx-2+i*2-((T>>2)%2),H-2+(i%2),C.foam);if(rainAcc>.5)for(let y=fy;y<H;y++)px(fx+2,y,((y+T)>>1)%2?C.seaL:C.sea)}
+ // 右崖面 + 大瀑布
+ rect(919,126,1,54,C.ink);
+ for(let y=127;y<H;y++){const w=3+((y-127)>>3);for(let i=0;i<w;i++){const ph=((y+(T>>0)*2+i*3)>>2)%4;px(920+i,y,ph===0?C.foam:(ph===1?C.seaL:(i===w-1?C.sea:C.seaL)))}}
+ for(let i=0;i<10;i++){const k=(T+i*7)%20;px(918+i*2+(k>>3),H-1-(k>>2),C.foam)}
+ rect(912,124,8,2,C.seaL);px(910,125,C.seaL);
+ // 码头侧拍岸浪花
+ const ph=(T>>2)%8;const fr=[[0,0],[1,2],[2,4],[3,7],[2,9],[1,6],[0,3],[0,1]][ph];
+ for(let y=157;y<H;y++)px(160,y,C.ink);
+ for(let i=0;i<fr[1];i++){px(158-(i%3),177-i,C.foam);if(i%2)px(156-(i%4),178-i,C.seaL)}}
+function drawPier(){OX=Math.round(camX);
+ for(let x=74;x<=156;x+=12){rect(x,165,3,15,C.woD);px(x+1,165,C.woM);const fy=174+((T>>3)+x)%2;rect(x-1,fy,5,1,C.foam)}
+ rect(70,158,90,6,C.woM);for(let x=70;x<160;x+=6)rect(x,158,1,6,C.woD);rect(70,164,90,1,C.ink);rect(70,158,90,1,C.fS);
+ if(snowAcc>.2)for(let x=70;x<160;x++)if(hsh(x,8)%100<snowAcc*90)px(x,158,C.foam);
+ for(let x=72;x<160;x+=16){rect(x,149,2,9,C.woD)}rect(72,150,88,1,C.woM);
+ rect(140,151,7,7,C.woM);rect(140,151,7,1,C.ink);rect(140,153,7,1,C.woD);rect(140,156,7,1,C.woD);
+ rect(148,153,9,5,C.woD);rect(149,154,7,3,C.woM);px(152,155,C.woD);
+ // 渔网
+ for(let i=0;i<8;i++){px(110+i,151+(i&1),C.cls);px(110+i,154,C.cls);px(110+(i&6),153,C.cls)}
+ line(74,163,boat.x+28,boatY()-1,boat.mode==='moored'&&scene==='village'?C.woM:0);
+ // 企鹅
+ const p=peng,pull=p.t>=176&&p.t<194&&!p.hold;blit(PENG[pull||p.hold?1:0],82,147+((T>>4)%2&&!pull&&!p.hold?1:0),0);
+ if(!p.hold){const tipx=pull?70:68,tipy=pull?140:142;line(83,153,tipx,tipy,C.woD);
+  const dip=p.t>160&&p.t<180?((T>>1)%2)+1:0,bob=(T>>3)%2;const bx=56,by=173+bob+dip;line(tipx,tipy,bx,by,C.cls);px(bx,by,C.roR);px(bx,by+1,C.foam)}
+ else{line(83,153,80,140,C.woD);blit(ICON.fish,78,140+((T>>3)%2));if((T>>3)%3===0){px(76,138,C.foam);px(86,137,C.lit)}}
+ if(p.fish){const t=p.fish.t/26;const fx=56+t*26,fy=172-Math.sin(t*Math.PI)*30;blit(FISH,fx,fy,t>.5)}
+ for(const g of perched){if(g.away){const f=((T>>1))%3;blit(GULL[f],g.x,g.y)}else blit(GULLSIT,g.x,g.y,g.x>110)}}
+function drawBoat(){OX=Math.round(camX);const bx=Math.round(boat.x),by=boatY();
+ rect(bx+2,by,24,2,C.woD);rect(bx,by-1,28,1,C.ink);rect(bx+1,by+2,26,3,C.woM);rect(bx+1,by+3,26,1,C.roR);rect(bx+3,by+5,22,1,C.woD);rect(bx+6,by+6,16,1,C.ink);px(bx-1,by-2,C.ink);px(bx+28,by-2,C.ink);
+ // 桨
+ if(boat.oar||fox.inBoat){const f=(T>>3)%2;const ox=bx+14,oy=by-1;if(f){line(ox,oy,ox-10,by+6,C.woD);rect(ox-12,by+6,3,2,C.woD)}else{line(ox,oy,ox+8,by+6,C.woD);rect(ox+8,by+6,3,2,C.woD)}
+  if(boat.oar&&(T>>3)%2===0){for(let i=0;i<3;i++)px(bx+(boat.mode==='out'===(scene==='village')?30+i*3:-3-i*3),by+7+(i&1),C.foam)}}
+ rect(bx-1,by+7,30,1,C.seaL);if((T>>3)%2)px(bx+30,by+6,C.foam);else px(bx-2,by+6,C.foam)}
+function drawBoatFront(){OX=Math.round(camX);const bx=Math.round(boat.x),by=boatY();rect(bx,by-1,28,1,C.ink);rect(bx+1,by,26,2,C.woM);rect(bx+1,by+1,26,1,C.woD)}
+function drawHouse(h,hi){const x=h.x,b=h.base,top=b-h.wh;const lit=dark()&&(phase!=='day'||hi%2===0||weather!=='sun')&&(phase==='night'||hi%2===0||weather!=='sun');
+ rect(x,top,h.w,h.wh,C.wall);rect(x+h.w-5,top,5,h.wh,C.wallS);rect(x,b-4,h.w,4,C.stone);for(let i=0;i<h.w;i+=6)px(x+i+(hi%2)*2,b-2,C.clM);rect(x,b-4,h.w,1,C.clM);
+ for(let i=0;i<h.w-6;i+=7)for(let j=top+4;j<b-6;j+=9)if(hsh(i+x,j)%5===0)rect(x+i+2,j,3,1,C.wallS);
+ rect(x-1,top,1,h.wh,C.ink);rect(x+h.w,top,1,h.wh,C.ink);rect(x-1,b,h.w+2,1,C.ink);
+ if(h.timber){rect(x+1,top,2,h.wh-4,C.woD);rect(x+h.w-3,top,2,h.wh-4,C.woD);rect(x,top+Math.floor(h.wh/2),h.w,2,C.woD);line(x+3,top+Math.floor(h.wh/2),x+12,top+2,C.woD);line(x+h.w-4,top+Math.floor(h.wh/2),x+h.w-13,top+2,C.woD)}
+ if(h.two){rect(x,top+27,h.w,2,C.woD);rect(x,top+29,h.w,1,C.wallS)}
+ const wins=[];if(h.two){wins.push([x+7,top+8],[x+h.w/2-5,top+8],[x+h.w-17,top+8],[x+8,top+36])}else{wins.push([x+6,top+14]);if(h.w>=50)wins.push([x+h.w-17,top+14])}
+ for(const[wx,wy]of wins){if(lit&&phase==='night'){rect(wx-1,wy-3,12,16,C.peach);rect(wx-3,wy-1,16,12,C.peach);rect(wx,wy-1,10,12,C.glow1);rect(wx-1,wy,12,10,C.glow1)}else if(lit){rect(wx,wy-1,10,12,C.glow1);rect(wx-1,wy,12,10,C.glow1)}
+  rect(wx,wy,10,10,C.woD);rect(wx+1,wy+1,8,8,lit?C.lit:C.sk2);if(lit){rect(wx+1,wy+6,8,3,C.glow1)}else{px(wx+2,wy+2,C.cl);px(wx+3,wy+2,C.cl);px(wx+2,wy+3,C.cl);px(wx+6,wy+6,C.cl)}
+  rect(wx+4,wy+1,2,8,C.woD);rect(wx+1,wy+4,8,1,C.woD);rect(wx-1,wy+10,12,1,C.woM);rect(wx-1,wy+11,12,1,C.woD);
+  rect(wx-3,wy,2,10,h.roof===C.roB?C.roB:C.grD);rect(wx+11,wy,2,10,h.roof===C.roB?C.roB:C.grD);for(let j=1;j<10;j+=3){px(wx-3,wy+j,C.ink);px(wx+12,wy+j,C.ink)}
+  if(h.box){rect(wx,wy+12,10,3,C.woD);rect(wx,wy+12,10,1,C.woM);for(let i=0;i<10;i+=2)px(wx+i,wy+11,(i/2+hi)%3?C.pink:C.lit);px(wx+1,wy+11,C.grD);px(wx+5,wy+11,C.grD);px(wx+8,wy+11,C.gr)}
+  if(snowAcc>.25)rect(wx-1,wy+10,12,1,C.foam)}
+ // 门：13x24，拱顶，门牌 + 门灯 + 台阶
+ const dw=h.dw,dh=h.dh,dx=h.dx,dy=b-4-dh;
+ rect(dx-2,dy-1,dw+4,dh+1,C.woD);rect(dx-1,dy-3,dw+2,2,C.woD);rect(dx+1,dy-4,dw-2,1,C.woD);
+ let open=0;if(h.door){open=h.dt<8?h.dt>>1:(h.dt>110?Math.max(0,4-((h.dt-110)>>1)):4)}
+ rect(dx,dy,dw,dh,C.ink);rect(dx+1,dy-2,dw-2,2,C.ink);
+ if(open>=3&&h.dt>=8&&h.dt<112){const an=ANIM[h.an];const pk=Math.min(10,(h.dt-8)>>1);rect(dx+1,dy,dw-1,dh,lit?C.glow1:C.ink);blit(an,dx+1,dy+dh-pk);
+  if(h.dt>34&&h.dt<80){drawHeart(dx+4,dy-12-((h.dt>>2)%2))}}
+ if(open<4){const ow=dw-open*3;rect(dx,dy,ow,dh,C.woM);rect(dx+1,dy-2,Math.max(0,ow-2),2,C.woM);for(let i=2;i<ow;i+=3)rect(dx+i,dy,1,dh-1,C.woD);rect(dx+2,dy+3,Math.max(0,ow-4),5,C.woD);rect(dx+3,dy+4,Math.max(0,ow-6),3,lit?C.lit:C.sk2);px(dx+ow-3,dy+13,C.lit);if(open)rect(dx+ow,dy,1,dh,C.woD)}else if(!(h.dt>=8&&h.dt<112))rect(dx+1,dy,dw-1,dh,lit?C.glow1:C.ink);
+ rect(dx-3,b-4,dw+6,2,C.stone);rect(dx-3,b-2,dw+6,1,C.clM);
+ rect(dx+dw+3,dy+2,7,5,C.woD);rect(dx+dw+4,dy+3,5,3,C.lit);ptextNum(h.num,dx+dw+5,dy+3);
+ const lampx=dx-6;rect(lampx,dy+1,3,4,C.ink);rect(lampx+1,dy+2,1,2,dark()?C.lit:C.sk2);if(dark()&&phase==='night'){px(lampx-1,dy+3,C.glow1);px(lampx+3,dy+3,C.glow1)}
+ if(h.awn){for(let i=0;i<h.w+4;i++){const c=(i>>2)%2?C.foam:C.roR;rect(x-2+i,top+1,1,6,c);if(i%4<2)px(x-2+i,top+7,c)}rect(x-2,top,h.w+4,1,C.ink);
+  rect(x+h.w-22,top+10,18,9,C.woD);rect(x+h.w-21,top+11,16,7,C.fC);ICON.apple&&blit(ICON.apple,x+h.w-17,top+10)}
+ // 屋顶
+ const rh=h.rh,ov=4;const rc=h.roof,rd=rc===C.roB?C.ink:(rc===C.woM?C.woD:C.roD);
+ for(let r=0;r<=rh;r++){const t=r/rh;const half=Math.round(2+(h.w/2+ov-2)*t);const cx=x+h.w/2,y=top-rh+r;const L=Math.round(cx-half),Rr=Math.round(cx+half);
+  for(let xx=L;xx<Rr;xx++){let c=rc;const tr=r%4;if(tr===3)c=rd;else if(((xx+(Math.floor(r/4)%2)*3)%6)===0&&tr>0)c=rd;if(xx>cx+half-5&&tr!==3)c=rc===C.roR?C.roD:(rc===C.roB?C.ink:C.woD);if(rc===C.roB&&c===rc&&((xx+r)%9===0))c=C.seaL;if(tr===0&&c===rc&&xx<cx&&(xx+r)%5===0)c=rc===C.roR?C.pink:(rc===C.woM?C.fS:C.seaL);
+   const sw=1+Math.floor(snowAcc*4),cap=Math.floor(snowAcc*rh*.5)+(hsh(xx>>1,hi)%3)-1;if(snowAcc>.05&&(r<cap||xx-L<sw||Rr-1-xx<sw||(r===cap&&hsh(xx,hi+7)%2)))c=(xx>cx+half-5)?C.cls:C.foam;else if(snowAcc>.3&&tr===3&&hsh(xx,r)%4===0)c=C.foam;px(xx,y,c)}
+  px(L-1,y,C.ink);px(Rr,y,C.ink)}
+ rect(x-ov-1,top+1,h.w+2*ov+2,1,C.ink);rect(x,top+2,h.w,1,C.wallS);rect(x+h.w/2-2,top-rh-1,4,1,C.ink);
+ if(snowAcc>.4){for(let i=0;i<h.w+2*ov;i+=5){const L=2+hsh(i,hi)%3;if(hsh(i,hi+1)%3===0)rect(x-ov+i,top+2,1,Math.min(L,1+Math.floor(snowAcc*3)),C.foam)}}
+ // 烟囱
+ const cxp=x+Math.round(h.w*h.chim)-3,cy=top-chimY(h)-9;rect(cxp,cy,8,11,C.stone);rect(cxp+5,cy,3,11,C.clM);for(let j=cy+3;j<cy+11;j+=3)rect(cxp,j,8,1,C.clM);rect(cxp-1,cy-1,10,2,C.ink);rect(cxp-1,cy,1,11,C.ink);rect(cxp+8,cy,1,11,C.ink);
+ if(snowAcc>.2)rect(cxp-1,cy-2,10,1,C.foam)}
+function ptextNum(n,x,y){const s=['','010110010010','111001010111','110001010110','101111001001','111100011110','011100111111'][n];for(let i=0;i<12;i++)if(s[i]==='1')px(x+i%3,y+(i/3|0)-1+1,C.woD)}
+function drawHeart(x,y){const s=['.r.r.','rrrrr','rrrrr','.rrr.','..r..'];s.forEach((r,j)=>{for(let i=0;i<5;i++)if(r[i]==='r')px(x+i,y+j,C.pink)});px(x+1,y+1,C.foam)}
+function drawSmoke(){OX=Math.round(camX);for(const s of smoke){const c=s.l<30?(phase==='day'?C.stone:(night()?C.cls:C.cl)):(night()?C.mt1:C.cls);if(s.l<12){px(s.x,s.y,c);px(s.x+1,s.y,c)}else if(s.l<40){rect(s.x,s.y,2,2,c);px(s.x-1,s.y,c);px(s.x+2,s.y+1,c)}else{rect(s.x-1,s.y,3,3,c);px(s.x,s.y-1,c);px(s.x+2,s.y-1,C.cls)}}}
+const sway=()=>[0,1,1,0,0,-1][(T>>3)%6];
+function drawTree(t){const g=gyV(t.x),sw=sway();rect(t.x-2,g-8-t.th,5,t.th+1,C.woD);rect(t.x-1,g-8-t.th,1,t.th+1,C.woM);px(t.x-3,g-8,C.woD);px(t.x+3,g-8,C.woD);px(t.x-3,g-9,C.woD);px(t.x+3,g-9,C.woD);
+ const tx=t.x-Math.floor(t.s.w/2),ty=g-8-t.th-t.s.h+7;blit(t.s,tx,ty,0,j=>j<t.s.h*.45?sw:0);
+ if(snowAcc>.1)for(let i=0;i<t.s.w;i++){const tp=t.s.tops[i];if(tp<0)continue;const d=1+(hsh(i,t.x)%100<snowAcc*100?Math.floor(snowAcc*2):0);for(let k=0;k<d;k++)if(hsh(i,k+t.x)%100<snowAcc*130)px(tx+i+(tp<t.s.h*.45?sw:0),ty+tp+k,C.foam)}}
+function drawFence(x0,x1){const g=gyV(x0);for(let x=x0;x<x1;x+=5){rect(x,g-18,2,11,C.woM);px(x,g-19,C.woM);px(x+1,g-18,C.fC);if(snowAcc>.3)px(x,g-20,C.foam)}rect(x0,g-15,x1-x0,1,C.woD);rect(x0,g-11,x1-x0,1,C.woD)}
+function drawLamp(L){const x=L.x,g=gyV(x);const on=L.on||ending;rect(x,g-32,2,26,C.ink);rect(x-1,g-8,4,2,C.ink);rect(x-3,g-38,8,7,C.ink);rect(x-2,g-37,6,5,on?C.lit:C.sk2);px(x,g-39,C.ink);px(x+1,g-39,C.ink);rect(x-4,g-31,10,1,C.ink);
+ if(snowAcc>.2)rect(x-3,g-40,8,1,C.foam);
+ if(on){rect(x-4,g-37,1,5,C.glow1);rect(x+5,g-37,1,5,C.glow1);rect(x-3,g-39,8,1,C.glow1);if(dark()){rect(x-8,g-4,18,1,C.glow1);rect(x-12,g-3,26,1,C.peach);px(x-6,g-30,C.glow1);px(x+7,g-30,C.glow1)}}}
+function drawBush(x,y,w,seedv){for(let i=0;i<w;i++){const hgt=4+Math.round(Math.sin(i/w*Math.PI)*4);for(let j=0;j<hgt;j++){let c=j===hgt-1?C.ink:(j>hgt-3?C.gr:C.grD);if(j===hgt-2&&snowAcc>.3&&hsh(i,seedv)%3)c=C.foam;px(x+i,y-j,c)}}
+ for(let i=1;i<w-1;i+=2){const hh=hsh(i,seedv);if(hh%3===0)continue;const fy=y-2-(hh>>4)%4;px(x+i,fy,[C.pink,C.lit,C.foam,C.roR][(hh>>6)%4])}}
+function drawClothes(){const a=252,b=286,g=gyV(a);rect(a,g-34,2,27,C.woD);rect(b,g-34,2,27,C.woD);for(let x=a+2;x<b;x++){const y=g-33+Math.round(Math.sin((x-a)/(b-a)*Math.PI)*2);px(x,y,C.ink)}
+ const f=(T>>3)%3;const wet=weather==='rain';const cl=[[256,C.roB,8,8],[267,C.foam,7,10],[277,C.pink,6,7]];cl.forEach(([x,c,w,hh],i)=>{const y=g-32+Math.round(Math.sin((x-a+2)/(b-a)*Math.PI)*2);rect(x,y,w,hh,c);px(x,y,C.ink);px(x+w-1,y,C.ink);const fl=wet?0:(f+i)%3;if(fl===1)rect(x+1,y+hh,w-1,1,c);if(fl===2)rect(x-1,y+hh-1,1,1,c);if(i===0){rect(x-1,y,1,3,c);rect(x+w,y,1,3,c)}if(wet&&(T+i*7)%20<3)px(x+2,y+hh+1+((T>>1)%3),C.seaL)})}
+function drawMailbox(){const x=404,g=gyV(x);rect(x,g-16,3,10,C.woD);rect(x-5,g-26,13,10,C.ink);rect(x-4,g-25,11,8,C.roR);rect(x-4,g-25,11,2,C.roD);rect(x-2,g-22,7,1,C.ink);rect(x+3,g-19,3,1,C.roD);
+ const up=mail.posted||mail.st>=2;if(up){rect(x+8,g-31,1,9,C.ink);rect(x+9,g-31,4,3,C.roR)}else{rect(x+8,g-22,5,1,C.ink);rect(x+12,g-23,2,3,C.roR)}
+ if(snowAcc>.2)rect(x-5,g-27,13,1,C.foam);
+ if(mail.st===1){const t=mail.t/14;blit(ICON.letter,x-4+Math.round((1-t)*-8),g-30+Math.round(t*8))}
+ if(mail.st===2){const t=mail.t;let bx,by;if(t<50){bx=x-160+t*3.1;by=40+t*1.1}else if(t<70){bx=x-5;by=g-36}else{bx=x-5+(t-70)*3;by=g-36-(t-70)*2}
+  blit(PIGEON[(T>>2)%2],bx,by,t>=70?0:0);if(t<70)blit(ICON.letter,bx+2,by+6)}}
+function drawProps(){OX=Math.round(camX);
+ drawFence(652,682);drawFence(250,252);drawFence(512,520);drawFence(890,912);
+ drawBush(214,143,7,1);drawBush(170,143,8,2);drawBush(290,143,6,3);drawBush(520,131,7,4);drawBush(586,131,8,5);drawBush(684,131,10,6);drawBush(870,119,9,7);
+ drawClothes();drawMailbox();
+ rect(360,gyV(360)-14,8,7,C.woM);rect(360,gyV(360)-14,8,1,C.ink);rect(360,gyV(360)-11,8,1,C.woD);rect(369,gyV(369)-12,6,5,C.woD);rect(370,gyV(369)-11,4,3,C.woM);
+ // 花盆
+ for(const[px2,cc]of[[250,C.pink],[440,C.lit],[586,C.roR],[712,C.pink]]){const g=gyV(px2);rect(px2,g-11,5,4,C.roD);rect(px2-1,g-12,7,1,C.roR);px(px2+1,g-14,cc);px(px2+3,g-15,cc);px(px2+2,g-13,C.grD);px(px2+2,g-14,C.gr)}
+ // 路牌
+ const g3=gyV(434);rect(428,g3-24,2,17,C.woD);rect(422,g3-28,15,6,C.woM);rect(422,g3-28,15,1,C.ink);rect(433,g3-26,2,2,C.ink);px(435,g3-25,C.ink);rect(424,g3-26,6,1,C.woD);
+ // 长椅
+ {const bx=600,g=gyV(bx);}
+ // 羽毛鸟巢（崖顶）
+ {const nx=908,g=gyV(nx);rect(nx-5,g-9,10,2,C.woM);for(let i=0;i<10;i+=2)px(nx-5+i,g-10,C.woD)}
+ TREES.filter(t=>!t.back).forEach(drawTree);LAMPS.forEach(drawLamp)}
+function drawCat(){const h=HOUSES[4];const x=h.x+h.w/2-3,y=h.base-h.wh-h.rh-11;let fr=CAT[(T%70)<3?1:0],flip=0,hop=0;
+ if(cat.happy>0){const k=(cat.happy>>2)%4;fr=[CATHAPPY,CAT[3],CAT[2],CAT[3]][k];flip=k===3;hop=[0,2,3,2][(cat.happy>>1)%4];if(cat.happy%16<8)drawHeart(x+8,y-8-((cat.happy>>2)%3))}
+ blit(fr,x,y-hop,flip);if(fr!==CAT[2]){const tf=(T>>3)%3;for(const[tx,ty]of CATTAIL[tf]){px(x+tx+1,y+ty+1-hop,C.peach);px(x+tx+2,y+ty+1-hop,C.ink)}}else for(let j=0;j<5;j++)px(x+3,y+4-j-hop+10,C.peach);
+ if(cat.meow>0)drawNote(x+9,y-4-((cat.meow>>2)%2));
+ if(cat.fish){const t=cat.fish.t/20,f=cat.fish;blit(FISH,f.x0+(f.x1-f.x0)*t-2,f.y0+(f.y1-f.y0)*t-Math.sin(t*Math.PI)*22,0)}}
+function drawNote(x,y){rect(x+2,y,1,5,C.ink);px(x+3,y,C.ink);px(x+4,y+1,C.ink);rect(x,y+4,2,2,C.ink)}
+function drawChicks(){for(const c of chicks){const g=gyV(c.x);let s=CHICK[0],yy=g-10;if(c.st===0)s=CHICK[(c.t>>2)%2?0:2];if(c.st===1)s=CHICK[((c.t>>3)%2)?1:0];if(c.st===3){s=CHICK[0];yy-=[0,2,4,5,4,2,0][Math.min(6,c.t>>1)]||0}blit(s,c.x-4,yy,c.dir<0)}}
+function drawGulls(){OX=Math.round(camX);for(const[i,g]of gulls.entries()){const f=((T>>2)+i)%4;blit(GULL[[0,1,2,1][f]],g.x-3,g.y)}}
+function drawSeabirds(){OX=Math.round(camX);seabirds.forEach((b,i)=>{const x=b.cx+Math.cos(b.a)*28,y=b.cy+Math.sin(b.a*1.3)*6;const f=((T>>2)+i)%3;const s=[['k...k','.w.w.','..w..'],['.....','ww.ww','..w..'],['.....','.www.','w...w']][f];s.forEach((r,j)=>{for(let k=0;k<5;k++)if(r[k]!=='.')px(x+k,y+j,r[k]==='k'?C.ink:C.foam)})})}
+function drawItems(){for(const it of ITEMS){if(it.got||it.s!==scene)continue;const b=((T>>3)+it.x)%2;const s=ICON[it.k];blit(s,it.x-Math.floor(s.w/2),it.y-s.h-b);const sp=((T>>2)+it.x)%12;if(sp<3){const sx=it.x+[5,-5,3][sp%3],sy=it.y-s.h-3+[0,2,-2][sp%3];px(sx,sy,C.foam);if(sp===1){px(sx-1,sy,C.lit);px(sx+1,sy,C.lit);px(sx,sy-1,C.lit);px(sx,sy+1,C.lit)}}}}
+function foxPose(){const f=fox;let n='idle',t=T>>1;
+ if(f.inBoat)return{sit:1,eye:(T%50)<2?1:0,tail:(T>>3)%4,ear:boat.oar?(T>>3)%3:0,mouth:boat.oar?1:0};
+ if(f.air)n=f.vy<0?'jumpUp':'jumpDown';else if(f.land>0)n='crouch';else if(f.tx!==null&&f.emoT<=0){n=f.run?'run':'walk';t=Math.floor(f.af)}
+ else if(f.emo)n=f.emo;else if(f.idle>24*10)n='sleep';else if(f.idle>24*5)n='sit';else if(weather==='rain')n='umbrella';
+ const tt=f.emo?(Fox.POSE[f.emo]&&['sneeze','stretch'].includes(f.emo)?(({sneeze:22,stretch:30})[f.emo]-f.emoT):t):t;
+ return Fox.pose(n,tt)}
+function drawFox(){OX=Math.round(camX);const o=foxPose();const s=foxSpr(o);const flip=fox.face<0;
+ if(!fox.inBoat){const g=gy(fox.x);const sc=isPier(fox.x)?C.woD:(scene==='island'?C.fS:C.clM);rect(fox.x-7,g-1,14,1,sc);rect(fox.x-5,g,10,1,sc)}
+ blit(s,fox.x-16,fox.y-30,flip);
+ if(fox.carry==='fish'&&!fox.inBoat)blit(ICON.fish,fox.x+(flip?-15:9),fox.y-16+((T>>3)%2));
+ if(weather==='rain'&&!fox.inBoat)drawUmbrella(o);
+ if(fox.bub)drawBubble()}
+function drawUmbrella(o){const side=!!o.side;const hx=Math.round(fox.x+(side?-fox.face*2:(fox.face<0?-4:4))),hy=fox.y-9+(o.dy|0);const top=fox.y-44+((o.dy|0)>>1);const cx=hx;
+ line(hx,hy,cx,top+6,C.ink);px(hx+1,hy+1,C.ink);px(hx+2,hy,C.ink);
+ for(let r=0;r<8;r++){const half=Math.round(3+r*1.6);for(let i=-half;i<=half;i++){const seg=Math.floor((i+half)/((half*2+1)/6));let c=seg%2?C.foam:C.roR;if(r===7&&((i+half)%5===0))c=C.ink;if(i>half-3&&c===C.roR)c=C.roD;px(cx+i,top+r,c)}px(cx-half-1,top+r,C.ink);px(cx+half+1,top+r,C.ink)}
+ for(let i=-14;i<=14;i++)if(((i+14)%5)!==0)px(cx+i,top+8,C.ink);px(cx,top-1,C.ink);px(cx,top-2,C.ink);
+ if(snowAcc>.2)rect(cx-5,top-1,10,1,C.foam);
+ if(T%6<3){px(cx-15,top+9+((T>>1)%4),C.seaL);px(cx+15,top+10+((T>>1)%3),C.seaL)}}
+function drawBreath(){OX=Math.round(camX);for(const b of breath){if(b.big){const r=b.l<8?1:2;rect(b.x-r+1,b.y-r+1,r*2-1+(b.l<8?1:0),r*2-1,C.foam);continue}if(b.l<6)px(b.x,b.y,C.foam);else if(b.l<12){rect(b.x,b.y,2,1,C.foam);px(b.x,b.y-1,C.foam)}else{px(b.x-1,b.y,C.cl);px(b.x+2,b.y,C.cl);px(b.x,b.y-1,C.cl)}}}
+function drawBubble(){const x=Math.round(fox.x)-7,y=Math.round(fox.y)-48-(fox.bubT>34?2:0)-(weather==='rain'?10:0);const w=15,h=12;
+ rect(x+1,y,w-2,h,C.foam);rect(x,y+1,w,h-2,C.foam);rect(x+1,y-1,w-2,1,C.ink);rect(x+1,y+h,w-2,1,C.ink);rect(x-1,y+1,1,h-2,C.ink);rect(x+w,y+1,1,h-2,C.ink);px(x,y,C.ink);px(x+w-1,y,C.ink);px(x,y+h-1,C.ink);px(x+w-1,y+h-1,C.ink);
+ px(x+6,y+h,C.foam);px(x+7,y+h,C.foam);px(x+7,y+h+1,C.foam);px(x+5,y+h,C.ink);px(x+8,y+h,C.ink);px(x+6,y+h+1,C.ink);px(x+8,y+h+1,C.ink);px(x+7,y+h+2,C.ink);
+ const k=fox.bub;if(ICON[k]){const s=ICON[k];blit(s,x+Math.floor((w-s.w)/2),y+Math.floor((h-s.h)/2))}
+ else if(k==='heart')drawHeart(x+5,y+3);else if(k==='!'){rect(x+7,y+2,2,5,C.roR);rect(x+7,y+8,2,2,C.roR)}else if(k==='?')ptext('?',x+5,y,C.roB);
+ else if(k==='z'){const zz=['kkkk','..k.','.k..','kkkk'];zz.forEach((r,j)=>{for(let i=0;i<4;i++)if(r[i]==='k')px(x+5+i,y+4+j,C.roB)});px(x+10,y+2,C.roB);px(x+11,y+2,C.roB)}}
+function drawSays(){OX=Math.round(camX);for(const s of says){if(s.sc!==scene)continue;const lines=s.text.split('\n');const w=Math.max(...lines.map(measure))+6,h=lines.length*11+3;const sxp=Math.round(s.x-OX);let bx=Math.max(2,Math.min(W-w-2,sxp-(w>>1))),by=Math.max(2,Math.round(s.y)-h-6-(s.t>66?1:0));
+  OX=0;rect(bx+1,by,w-2,h,C.foam);rect(bx,by+1,w,h-2,C.foam);rect(bx+1,by-1,w-2,1,C.ink);rect(bx+1,by+h,w-2,1,C.ink);rect(bx-1,by+1,1,h-2,C.ink);rect(bx+w,by+1,1,h-2,C.ink);px(bx,by,C.ink);px(bx+w-1,by,C.ink);px(bx,by+h-1,C.ink);px(bx+w-1,by+h-1,C.ink);
+  const tx=Math.max(bx+3,Math.min(bx+w-5,sxp));rect(tx,by+h,3,1,C.foam);px(tx+1,by+h+1,C.foam);px(tx-1,by+h,C.ink);px(tx+3,by+h,C.ink);px(tx,by+h+1,C.ink);px(tx+2,by+h+1,C.ink);px(tx+1,by+h+2,C.ink);
+  lines.forEach((l,i)=>ptext(l,bx+3,by+1+i*11,C.ink));OX=Math.round(camX)}}
+function drawFlies(){if(!night()||weather!=='sun')return;OX=Math.round(camX);for(const f of FLIES){const t=T+f.p;const on=(t%60)<38;if(!on)continue;const x=f.x+Math.sin(t/37)*f.amp,y=gyV(f.x)-16+Math.sin(t/23)*6;const br=(t%60)<20;if(br){px(x-1,y,C.glow1);px(x+1,y,C.glow1);px(x,y-1,C.glow1);px(x,y+1,C.glow1)}px(x,y,C.lit)}}
+function drawFW(){OX=0;const cx=Math.round(camX);for(const r of fw){px(r.x-cx,r.y,C.foam);px(r.x-cx,r.y+1,C.glow1);px(r.x-cx,r.y+3,C.glow1);if(T%2)px(r.x-cx,r.y+5,C.peach)}
+ for(const f of flash){disc(f.x-cx,f.y,f.l>2?3:2,C.foam);if(f.l>2){px(f.x-cx-5,f.y,C.lit);px(f.x-cx+5,f.y,C.lit);px(f.x-cx,f.y-5,C.lit);px(f.x-cx,f.y+5,C.lit)}}
+ for(const s of sparks){if(!s.big)continue;let c=s.l>38?C.foam:(s.l>16?s.c:(s.l>7?C.glow1:((T&1)?C.peach:0)));if(!c)continue;if(s.l>20&&s.px!==undefined){const tx=s.x-(s.x-s.px)*2.2,ty=s.y-(s.y-s.py)*2.2;line(s.px-cx,s.py,tx-cx,ty,s.l>38?s.c:(s.c===C.foam?C.cl:C.glow1))}px(s.x-cx,s.y,c);if(s.l>30)px(s.x-cx+1,s.y,c)}}
+function drawConfetti(){OX=0;const cx=Math.round(camX);for(const c of confetti){const f=((T>>1)+c.p)%4;const x=Math.round(c.x-cx),y=Math.round(c.y);if(f===0)rect(x,y,2,1,c.c);else if(f===1)rect(x,y,1,2,c.c);else if(f===2)px(x,y,c.c);else{px(x,y,c.c);px(x+1,y+1,c.c)}}
+ for(const b of balloons){const x=Math.round(b.x-cx),y=Math.round(b.y);rect(x-2,y,5,6,b.c);rect(x-1,y-1,3,8,b.c);px(x-1,y+1,C.foam);px(x,y+7,b.c);px(x-3,y+2,C.ink);px(x+3,y+2,C.ink);rect(x-2,y-1,1,1,C.ink);for(let j=0;j<10;j++)px(x+((j>>2)%2),y+8+j,C.ink)}}
+function drawSparks(){OX=Math.round(camX);for(const s of sparks)if(!s.big)px(s.x,s.y,s.l>7?C.foam:C.lit)}
+function drawSplash(){OX=Math.round(camX);for(const s of splash)px(s.x,s.y,s.rain?C.seaL:C.foam);for(const e of eaves){px(e.x,e.y,C.seaL);px(e.x,e.y-1,C.seaL)}}
+function drawWeather(){OX=0;
+ if(weather==='rain')for(const d of drops){const x=Math.round(d.x),y=Math.round(d.y);px(x,y,C.cl);px(x+1,y-3,C.cls);px(x+1,y-2,C.cls);px(x,y-1,C.cls)}
+ if(weather==='snow')for(const s of flakes){const x=Math.round(s.x),y=Math.round(s.y);px(x,y,C.foam);if(s.b){px(x-1,y,C.cl);px(x+1,y,C.cl);px(x,y-1,C.cl);px(x,y+1,C.cl)}}
+ // 水洼涟漪
+ if(rainAcc>.3&&scene==='village'){OX=Math.round(camX);for(const p of[206,330,470,560,744,860]){const g=gyV(p);rect(p-6,g-3,13,2,C.seaL);rect(p-5,g-2,11,1,C.sea);const k=((T>>1)+p)%14;if(k<6){px(p-k,g-3,C.foam);px(p+k,g-3,C.foam)}}OX=0}}
+function drawFog(back){if(weather!=='fog')return;OX=0;const y0=back?72:138,y1=back?128:176;const sp=back?.25:.6;
+ for(let y=y0;y<y1;y++){const row=(y-y0)>>1;if((y&1)&&!back)continue;const off=Math.round(T*sp*(row%2?1:.7))+row*37;for(let sx=0;sx<W;sx++){const k=Math.floor((sx+off)/(back?22:30));const h=hsh(k,row+(back?0:99));if(h%3===0||(back&&h%3===1&&y>y0+10)){const pos=(sx+off)%(back?22:30);if(pos>1&&pos<(back?20:24))buf[y*W+sx]=back&&(y<y0+6||h%5===0)?C.cls:C.cl}}}}
+function drawFore(){if(scene==='island')return;OX=Math.round(camX*1.3);const sw=sway();for(let sx=-6;sx<W+6;sx++){const x=sx+OX;const h=hsh(x>>1,9);if(h%5>1)continue;const hgt=3+(h>>5)%9;for(let j=0;j<hgt;j++){const xx=sx+(j>hgt*.55?sw:0)+(j>hgt-2&&(h>>3)&1?1:0);if(xx>=0&&xx<W)buf[(H-1-j)*W+xx]=j===hgt-1?(snowAcc>.4?C.foam:C.grL):(j>2?C.gr:C.grD)}
+  if((h>>9)%9===0){const fx=sx+sw,fy=H-hgt-2;if(fx>0&&fx<W-1){const fc=[C.pink,C.lit,C.foam,C.roR][(h>>12)%4];buf[fy*W+fx]=fc;buf[fy*W+fx-1]=fc;buf[fy*W+fx+1]=fc;buf[(fy-1)*W+fx]=fc;buf[(fy+1)*W+fx]=C.glow1;buf[fy*W+fx]=C.lit}}}
+ for(let sx=0;sx<W;sx++){buf[(H-1)*W+sx]=C.grD}}
+// ---------- 小岛场景 ----------
+function drawIsland(){OX=0;
+ // 远处的村子剪影（右侧地平线）
+ for(let i=0;i<70;i++){const hh=Math.round(10+Math.sin(i/9)*2);for(let y=HOR-hh;y<HOR;y++)px(240+i,y,C.mt2)}
+ [[246,6],[256,8],[268,6],[280,7]].forEach(([x,h])=>{rect(x,HOR-10-h,6,h,C.mt2);rect(x+1,HOR-11-h,4,1,C.mt2);px(x+2,HOR-12-h,C.mt2);px(x+2,HOR-8-h,warm()?C.lit:C.mt1)});
+ rect(296,HOR-32,3,22,C.mt2);rect(295,HOR-35,5,3,C.mt2);if(beam&&dark()&&(T>>3)%4)px(297,HOR-34,C.lit);
+ // 岛体：沙滩 + 草顶 + 岩基
+ for(let x=50;x<270;x++){const g=gyI(x);const edge=x<60||x>=258;const top=edge?(x<60?166+Math.round((60-x)/2):166+Math.round((x-258)/2)):g;if(top>174)continue;
+  for(let y=top;y<176;y++){let c;const d=y-top;if(g===150&&!edge&&d<4)c=d===0?C.grL:(snowAcc>.3&&d===1&&hsh(x,1)%2?C.foam:C.gr);else if(y<168)c=(hsh(x,y)%11===0?C.fC:C.fS);else c=(y===168?C.fS:((x+y)%5===0?C.clD:C.clM));if(d>=4&&g===150&&y<160)c=hsh(x>>1,y)%7===0?C.woM:C.fS;if(snowAcc>.4&&d===0)c=C.foam;px(x,y,c)}
+  if(g===150&&!edge){px(x,154,C.grD);if(hsh(x,2)%3===0)px(x,155,C.grD)}}
+ // 台阶竖面
+ for(const[a,b2]of[[100,156],[108,150]])for(let y=b2;y<b2+6;y++){px(a,y,C.woD)}for(const[a,b2]of[[226,156],[234,162]])for(let y=b2-6;y<b2;y++)px(a-1,y,C.woD);
+ // 浪圈
+ for(let x=46;x<276;x++){const k=((x>>2)+(T>>3))%5;if(k<3)px(x,174+(k===1?1:0),C.foam);if(((x+(T>>2))%9)===0)px(x,176,C.seaL)}
+ // 礁石、潮池、宝箱
+ rect(118,145,10,5,C.clM);rect(119,144,8,1,C.stone);rect(120,146,3,1,C.stone);rect(118,149,10,1,C.clD);
+ rect(196,163,12,3,C.sea);rect(195,164,14,1,C.sea);px(198,164,C.seaL);px(204,163,C.seaL);px(201,165,C.pink);
+ {const cx=208,g=150;rect(cx,g-8,12,8,C.woM);rect(cx,g-8,12,1,C.ink);rect(cx,g-5,12,1,C.woD);rect(cx-1,g-9,14,2,C.woD);rect(cx+5,g-6,2,3,C.lit);rect(cx,g-1,12,1,C.ink)}
+ // 棕榈
+ {const bx=160,g=150;for(let j=0;j<40;j++){const x=bx+Math.round(Math.sin(j/40*1.4)*9);px(x,g-j,j%4===0?C.woD:C.woM);px(x+1,g-j,C.woD);px(x-1,g-j,j%4===2?C.woD:C.woM)}
+  const tx=bx+9,ty=g-40,sw=sway();const fr=[[-16,6],[-11,10],[14,5],[10,10],[-4,-6],[6,-5]];for(const[dx,dy]of fr){const n=Math.max(Math.abs(dx),Math.abs(dy));for(let i=0;i<=n;i++){const t=i/n,x=tx+dx*t+(t>.5?sw:0),y=ty+dy*t+Math.sin(t*Math.PI)*-3+t*t*4;px(x,y,C.gr);px(x,y+1,C.grD);if(i%2)px(x,y+2,C.grD)}}
+  rect(tx-2,ty,3,3,C.woD);px(tx-2,ty+2,C.woM);px(tx+1,ty+1,C.woD);if(snowAcc>.2)rect(tx-6,ty-2,12,1,C.foam)}
+ // 草丛小花
+ drawIslandTufts()}
+function drawIslandTufts(){for(const x of[114,132,186,222]){const g=150;for(let i=0;i<5;i++){px(x+i,g-1-(i%2),C.gr);px(x+i,g-2-(i===2?1:0),C.grD)}px(x+2,g-4,C.pink)}}
+function drawCrab(){const s=CRAB[(crab.t>>2)&1];blit(s,crab.x,gyI(crab.x)-s.h)}
+// ---------- UI ----------
+const FONT3={'0':'111101101101111','1':'010110010010111','2':'111001111100111','3':'111001111001111','4':'101101111001001','5':'111100111001111','6':'111100111101111','7':'111001010010010','8':'111101111101111','9':'111101111001111',':':'000010000010000','/':'001001010100100'};
+function text3(s,x,y,c){OX=0;for(const ch of s){const g=FONT3[ch];if(g)for(let i=0;i<15;i++)if(g[i]==='1')px(x+i%3,y+(i/3|0),c);x+=4}}
+function panel(x,y,w,h,bg){OX=0;bg=bg||C.woD;rect(x+1,y,w-2,h,bg);rect(x,y+1,w,h-2,bg);rect(x+1,y+1,w-2,1,bg===C.woD?C.woM:C.cl);rect(x+1,y-1,w-2,1,C.ink);rect(x+1,y+h,w-2,1,C.ink);rect(x-1,y+1,1,h-2,C.ink);rect(x+w,y+1,1,h-2,C.ink);px(x,y,C.ink);px(x+w-1,y,C.ink);px(x,y+h-1,C.ink);px(x+w-1,y+h-1,C.ink)}
+function drawUI(){OX=0;const n=ITEMS.filter(i=>i.got).length;panel(3,3,98,13);ITEMS.forEach((it,i)=>{const s=ICON[it.k];const x=5+i*10,y=5;if(it.got)blit(s,x+Math.floor((9-s.w)/2),y+Math.floor((9-s.h)/2));else{for(let j=0;j<s.h;j++)for(let k=0;k<s.w;k++){const v=s.a[j*s.w+k];if(v&&v!==C.ink)px(x+Math.floor((9-s.w)/2)+k,y+Math.floor((9-s.h)/2)+j,C.woM)}}});
+ text3(n+'/8',86,7,n===8?C.lit:C.fC);
+ panel(3,19,40,9);const m=((Math.floor(gm)%1440)+1440)%1440;const hh=String(Math.floor(m/60)).padStart(2,'0'),mm=String(Math.floor(m%60/10)*10).padStart(2,'0');
+ const ic=phase==='night'?C.foam:(phase==='day'?C.lit:C.glow1);rect(6,21,5,5,ic);px(6,21,C.woD);px(10,21,C.woD);px(6,25,C.woD);px(10,25,C.woD);if(phase==='night')rect(8,21,3,3,C.woD);
+ text3(hh+((T>>4)%2?':':' ')+mm,14,21,C.fC);
+ // 天气键
+ const[wx0,wy0]=UI.wx;panel(wx0,wy0,12,10);
+ if(weather==='sun'){rect(wx0+4,wy0+3,4,4,C.lit);px(wx0+3,wy0+2,C.lit);px(wx0+8,wy0+2,C.lit);px(wx0+3,wy0+7,C.lit);px(wx0+8,wy0+7,C.lit)}
+ else{rect(wx0+3,wy0+3,6,3,C.cl);rect(wx0+4,wy0+2,3,1,C.cl);if(weather==='rain'){px(wx0+3,wy0+7,C.seaL);px(wx0+6,wy0+8,C.seaL);px(wx0+8,wy0+7,C.seaL)}if(weather==='snow'){px(wx0+3,wy0+7,C.foam);px(wx0+6,wy0+8,C.foam);px(wx0+8,wy0+7,C.foam)}if(weather==='fog'){rect(wx0+2,wy0+7,8,1,C.cls);rect(wx0+3,wy0+8,6,1,C.cls)}}
+ // 静音键
+ const[mx0]=UI.mute;panel(mx0,3,12,10);rect(mx0+2,6,2,4,C.fC);rect(mx0+4,5,1,6,C.fC);rect(mx0+5,4,1,8,C.fC);if(muted){px(mx0+7,6,C.roR);px(mx0+9,8,C.roR);px(mx0+8,7,C.roR);px(mx0+7,8,C.roR);px(mx0+9,6,C.roR)}else{rect(mx0+7,6,1,4,C.fC);rect(mx0+9,5,1,6,C.fC)}
+ // 小地图
+ const[ax,ay,aw,ah]=UI.map;panel(ax,ay,aw,ah,C.seaD);OX=0;
+ if(scene==='village'){const sc=66/WW;for(let i=0;i<66;i++){const wx=i/sc;const g=gyV(wx);if(wx>=70&&wx<920){const yy=ay+3+Math.round((g-120)/4);rect(ax+3+i,yy,1,ay+ah-1-yy,wx<160?C.woM:C.clM);px(ax+3+i,yy,C.gr)}else px(ax+3+i,ay+ah-3,C.sea)}
+  HOUSES.forEach(h=>{const x=ax+3+Math.round(h.x*sc),yy=ay+3+Math.round((h.base-120)/4);rect(x,yy-4,Math.max(2,Math.round(h.w*sc)),3,C.wall);rect(x,yy-5,Math.max(2,Math.round(h.w*sc)),1,h.roof)});
+  {const x=ax+3+Math.round((LH.x+14)*sc);rect(x,ay+2,2,7,C.roR);px(x,ay+4,C.foam);px(x+1,ay+6,C.foam)}
+  ITEMS.forEach(it=>{if(it.got||it.s!=='village')return;if((T>>3)%2)px(ax+3+Math.round(it.x*sc),ay+3+Math.round((it.y-124)/4),C.pink)});
+  const vx=ax+3+Math.round(camX*sc),vw=Math.round(W*sc);for(let i=0;i<vw;i++){px(vx+i,ay+1,C.foam);px(vx+i,ay+ah-2,C.foam)}rect(vx,ay+1,1,ah-2,C.foam);rect(vx+vw-1,ay+1,1,ah-2,C.foam);
+  const fx=ax+3+Math.round((fox.inBoat?boat.x+15:fox.x)*sc),fy=ay+3+Math.round(((fox.inBoat?160:fox.y)-130)/4);rect(fx,fy,2,2,(T>>2)%2?C.lit:C.fC);
+  const isl=ITEMS.slice(6).some(i=>!i.got);rect(ax+1,ay+ah-5,3,2,C.fS);if(isl&&(T>>3)%2)px(ax+2,ay+ah-6,C.pink)}
+ else{rect(ax+18,ay+12,34,4,C.fS);rect(ax+26,ay+9,18,3,C.gr);rect(ax+34,ay+5,1,5,C.woM);rect(ax+32,ay+4,5,1,C.gr);ITEMS.slice(6).forEach(it=>{if(!it.got&&(T>>3)%2)px(ax+14+Math.round(it.x/6),ay+12,C.pink)});rect(ax+14+Math.round(fox.x/6),ay+10,2,2,(T>>2)%2?C.lit:C.fC);rect(ax+58,ay+14,5,2,C.woM)}
+ // 提示条
+ if(toastT>0&&toast){const w=measure(toast)+10;const x=(W-w)>>1,y=toastT>40?(48-toastT)*2-4:12;panel(x,y,w,13);ptext(toast,x+5,y+1,C.fC)}}
+function drawCard(){if(!card)return;OX=0;const pop=Math.min(1,cardT/8);if(card.mail){const w=128,h=58,x=(W-w)>>1,y=36+Math.round((1-pop)*40);panel(x,y,w,h,C.fC);rect(x+3,y+3,w-6,1,C.fS);
+  ptext(TXT.mailT,x+(w-measure(TXT.mailT))/2|0,y+4,C.roD);blit(ICON.letter,x+8,y+6);blit(ICON.letter,x+w-18,y+6);ptext(TXT.mail1,x+10,y+18,C.ink);ptext(TXT.mail2,x+10,y+30,C.ink);ptext(TXT.mail3,x+w-measure(TXT.mail3)-8,y+43,C.woD);if(cardT>90)card=null;return}
+ const w=164,h=86,x=(W-w)>>1,y=40+Math.round((1-pop)*60);panel(x,y,w,h,C.woD);rect(x+3,y+3,w-6,h-6,C.fC);rect(x+3,y+3,w-6,1,C.lit);rect(x+3,y+h-4,w-6,1,C.fS);
+ for(let i=0;i<w-8;i+=6){px(x+4+i,y+5,C.glow1)}
+ const tw=measure(TXT.cardT)*2;ptext(TXT.cardT,x+((w-tw)>>1)+1,y+5,C.glow1,2);ptext(TXT.cardT,x+((w-tw)>>1),y+4,C.roD,2);
+ ptext(TXT.card1,x+((w-measure(TXT.card1))>>1),y+28,C.ink);
+ ITEMS.forEach((it,i)=>{const s=ICON[it.k];const bx=x+14+i*17,by=y+44+(((T>>3)+i)%2);rect(bx-2,by-2,13,13,C.fS);blit(s,bx+((9-s.w)>>1),by+((9-s.h)>>1))});
+ ptext(TXT.card2,x+((w-measure(TXT.card2))>>1),y+60,C.roB);
+ if(cardT>20&&(T>>4)%2)ptext(TXT.card3,x+((w-measure(TXT.card3))>>1),y+71,C.woM);
+ for(const[sx,sy]of[[x+8,y+10],[x+w-12,y+12],[x+12,y+h-14],[x+w-14,y+h-16]]){const k=((T>>2)+sx)%8;if(k<5){px(sx,sy,C.lit);if(k>1){px(sx-1,sy,C.glow1);px(sx+1,sy,C.glow1);px(sx,sy-1,C.glow1);px(sx,sy+1,C.glow1)}}}}
+function drawWipe(){if(!wipe)return;const t=wipe.t,half=wipe.dur>>1;const R=t<half?Math.round(200*(1-t/half)):Math.round(200*((t-half)/half));const cx=scene==='village'?(boat.x+15-camX):160,cy=165;
+ for(let by=0;by<H;by+=6)for(let bx=0;bx<W;bx+=6){if(Math.hypot(bx+3-cx,(by+3-cy)*1.2)>R){for(let y=by;y<Math.min(H,by+6);y++)buf.fill(C.ink,y*W+bx,y*W+Math.min(W,bx+6))}}}
+function render(){OX=0;drawSky();drawStars();drawMeteors();drawSun();drawFW();drawClouds();drawMount();drawSea();drawSail();
+ drawBeam();drawFog(true);
+ OX=Math.round(camX);drawGulls();
+ if(scene==='village'){OX=Math.round(camX);TREES.filter(t=>t.back).forEach(drawTree);
+  drawTerrain();OX=Math.round(camX);drawSeabirds();HOUSES.forEach(drawHouse);drawLighthouse();drawCat();drawSmoke();
+  drawProps();drawPier();drawBoat();OX=Math.round(camX);drawItems();drawChicks();drawFox();if(fox.inBoat)drawBoatFront()}
+ else{drawIsland();drawBoat();OX=0;drawItems();drawCrab();drawFox();if(fox.inBoat)drawBoatFront()}
+ drawBreath();drawSparks();drawSplash();drawFlies();drawConfetti();drawWeather();drawFog(false);drawFore();drawSays();drawUI();drawCard();drawWipe();
+ for(let i=0;i<buf.length;i++)u32[i]=pal32[buf[i]];ctx.putImageData(img,0,0)}
+// 驱动：固定 24 tick/s
+window.__manual=/manual/.test(location.search);
+window.__step=n=>{for(let i=0;i<n;i++)tick();render()};window.__click=click;window.__cw=(x,y)=>click(Math.round(x-Math.round(camX)),y);
+window.__st=()=>({phase,gm,weather,scene,snowAcc,fox:{x:fox.x,y:fox.y,carry:fox.carry,inBoat:fox.inBoat,tx:fox.tx},got:ITEMS.map(i=>i.got),cam:camX,boat:boat.mode,peng:peng.hold,mail:mail.posted,card:!!card});
+window.__png=()=>cv.toDataURL('image/png');
+window.__set=o=>{if(o.gm!==undefined){gm=o.gm;phase='x';setPhase(phaseOf(gm));palK=3;palT=4}if(o.weather){weather=o.weather;retarget();palK=3;palT=4}if(o.snow!==undefined)snowAcc=o.snow;if(o.fx!==undefined){fox.x=o.fx;fox.y=gy(o.fx);camX=Math.max(0,Math.min(WW-W,fox.x-150))}return 1};
+let acc=0,last=performance.now();
+function loop(now){acc+=Math.min(200,now-last);last=now;let n=0;while(acc>=1000/24&&n<6){tick();acc-=1000/24;n++}if(n)render();requestAnimationFrame(loop)}
+camX=Math.max(0,fox.x-150);render();if(!window.__manual)requestAnimationFrame(loop);
+</script>

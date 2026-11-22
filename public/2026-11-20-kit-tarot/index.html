@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>狐兔塔罗 · Fox-Bunny Tarot</title>
+<style>
+html,body{margin:0;height:100%;background:#07060b;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;font-family:"Iowan Old Style","Palatino Linotype",Georgia,"Songti SC",serif;color:#e9d9b0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#gl{z-index:1}#fg{z-index:2;pointer-events:none}#bg{z-index:0}
+.ui{position:absolute;z-index:3;left:0;right:0;text-align:center;pointer-events:none}
+#top{top:max(14px,env(safe-area-inset-top));font-size:15px;letter-spacing:.32em;opacity:.8}
+#top b{font-weight:normal;color:#f6dc8e}
+#bot{bottom:max(16px,env(safe-area-inset-bottom));font-size:12px;letter-spacing:.12em;opacity:.55}
+#dots{bottom:calc(max(16px,env(safe-area-inset-bottom)) + 26px)}
+#dots i{display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 6px;background:#e9d9b0;opacity:.25;transition:.3s}
+#dots i.on{opacity:.95;background:#f6dc8e;box-shadow:0 0 8px #f6dc8e}
+.nav{position:absolute;z-index:3;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:50%;border:1px solid rgba(246,220,142,.35);background:rgba(20,16,30,.35);color:#f6dc8e;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+#prev{left:14px}#next{right:14px}
+#gyro{position:absolute;z-index:3;right:12px;top:max(10px,env(safe-area-inset-top));font-size:12px;padding:5px 10px;border-radius:14px;border:1px solid rgba(246,220,142,.35);background:rgba(20,16,30,.4);color:#f6dc8e;display:none}
+#cur{position:absolute;z-index:4;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:2px solid rgba(255,255,255,.85);box-shadow:0 0 10px rgba(255,240,200,.6);pointer-events:none;display:none;transition:transform .12s}
+#cur.dn{transform:scale(.7);background:rgba(255,240,200,.35)}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas><canvas id="gl"></canvas><canvas id="fg"></canvas>
+<div class="ui" id="top">✦ <b>FOX·BUNNY TAROT</b> ✦</div>
+<div class="ui" id="dots"><i></i><i></i><i></i></div>
+<div class="ui" id="bot">移动倾斜 · 点击翻牌 · 左右切换</div>
+<button class="nav" id="prev" aria-label="上一张">‹</button>
+<button class="nav" id="next" aria-label="下一张">›</button>
+<button id="gyro">开启陀螺仪</button>
+<div id="cur"></div>
+<script>
+(()=>{
+const TEX={moon:'moon.webp',sun:'sun.webp',star:'star.webp',back:'back.webp'};
+// 每张牌：脸保护区(u,v,ru,rv)、底纹类型(0 星轨 1 放射 2 星尘)、底纹中心、色调、四芒星锚点(u,v,phi,scale)
+const CARDS=[
+ {k:'moon',face:[.42,.27,.15,.11],pat:0,pc:[.36,.16],tint:[.75,.82,1],sp:[[0.375,0.43,3.22,1.28],[0.909,0.065,0.91,1.27],[0.088,0.065,1.96,1.01],[0.297,0.614,5.2,1.0],[0.095,0.479,3.45,0.81],[0.595,0.691,4.73,1.07],[0.767,0.64,2.07,1.19],[0.483,0.076,1.91,1.03]]},
+ {k:'sun',face:[.435,.30,.15,.11],pat:1,pc:[.44,.17],tint:[1,.88,.62],sp:[[0.217,0.747,1.64,0.95],[0.719,0.799,5.12,0.85],[0.889,0.816,3.77,1.16],[0.202,0.155,1.18,0.83],[0.603,0.214,1.73,1.13],[0.903,0.69,3.53,0.88],[0.405,0.117,2.72,1.13],[0.689,0.091,2.66,1.12]]},
+ {k:'star',face:[.46,.30,.15,.11],pat:2,pc:[.46,.20],tint:[.85,.8,1],sp:[[0.656,0.065,0.54,0.92],[0.347,0.065,5.03,1.09],[0.855,0.066,0.59,1.02],[0.144,0.067,3.01,0.88],[0.611,0.714,4.62,0.86],[0.403,0.5,2.46,1.06],[0.866,0.709,2.71,1.09],[0.588,0.492,4.64,1.28]]},
+];
+const BACK={face:[.5,.44,.17,.12],pat:0,pc:[.5,.5],tint:[1,.9,.7],sp:[[0.531,0.76,5.93,1.06],[0.742,0.312,6.13,0.84],[0.17,0.758,3.82,0.99],[0.748,0.651,5.04,0.89],[0.344,0.265,5.48,1.07],[0.845,0.183,5.67,1.04],[0.545,0.198,2.7,1.19],[0.848,0.77,6.18,0.98]]};
+const REC=!!window.__rec;
+const $=id=>document.getElementById(id);
+const bg=$('bg'),gl_c=$('gl'),fg=$('fg');
+const gl=gl_c.getContext('webgl',{antialias:true,alpha:true,premultipliedAlpha:true,preserveDrawingBuffer:REC});
+if(!gl){document.body.insertAdjacentHTML('beforeend','<p class="ui" style="top:45%">此浏览器不支持 WebGL</p>');return}
+const bx=bg.getContext('2d'),fx=fg.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){DPR=Math.min(2,window.devicePixelRatio||1);W=innerWidth;H=innerHeight;for(const c of [bg,gl_c,fg]){c.width=W*DPR|0;c.height=H*DPR|0}gl.viewport(0,0,gl_c.width,gl_c.height)}
+addEventListener('resize',resize);resize();
+
+// ---------- shaders ----------
+const VS=`attribute vec3 p;attribute vec2 uv;attribute vec3 n;uniform mat4 M,P;varying vec2 vUv;varying vec3 vN;varying vec3 vW;
+void main(){vec4 w=M*vec4(p,1.);vW=w.xyz;vN=mat3(M)*n;vUv=uv;gl_Position=P*w;}`;
+const FS=`precision highp float;varying vec2 vUv;varying vec3 vN;varying vec3 vW;
+uniform sampler2D T;uniform vec2 tilt;uniform vec4 face;uniform float pat;uniform vec2 pc;uniform vec3 tint;uniform vec4 sp[8];uniform float dim;uniform float tm;uniform vec2 texel;
+float sm(float x){x=clamp(x,0.,1.);return x*x*(3.-2.*x);}
+vec3 hsv2rgb(vec3 c){vec3 p=abs(fract(c.xxx+vec3(1.,2./3.,1./3.))*6.-3.);return c.z*mix(vec3(1.),clamp(p-1.,0.,1.),c.y);}
+float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float rr(vec2 uv){vec2 s=vec2(1.,1.5);vec2 q=abs(uv-.5)*s;vec2 b=vec2(.5,.75)-.038;vec2 d=q-b;float r=.038;float dd=length(max(d,0.))-r;return 1.-smoothstep(-.0015,.0015,dd);}
+void main(){
+ vec2 uv=vUv;float u=uv.x,v=uv.y;float sy=tilt.x,sx=tilt.y;
+ float a=rr(uv);if(a<.01)discard;
+ vec3 c=texture2D(T,uv).rgb;
+ float lum=dot(c,vec3(.3,.59,.11));
+ // masks
+ float d=pow((u-face.x)/face.z,2.)+pow((v-face.y)/face.w,2.);
+ float fm=clamp(1.6-d,0.,1.);
+ float tt=clamp(min(min(u-.17,.83-u),min(v-.875,.965-v))*40.,0.,1.)*(pat<.5&&face.y>.4?0.:1.);
+ float prot=max(fm,tt);float keep=1.-.85*prot;
+ float mx=max(c.r,max(c.g,c.b)),mn=min(c.r,min(c.g,c.b));float sat=(mx-mn)/(mx+1e-4);
+ float hue=0.;if(mx-mn>1e-4){if(mx==c.r)hue=mod((c.g-c.b)/(mx-mn),6.);else if(mx==c.g)hue=(c.b-c.r)/(mx-mn)+2.;else hue=(c.r-c.g)/(mx-mn)+4.;}hue*=60.;
+ float edge=min(min(u,1.-u),min(v,1.-v)*1.5);
+ float gold=max(sm((sat-.35)/.3)*sm((mx-.55)/.3)*clamp(1.-abs(hue-48.)/24.,0.,1.),.8*clamp(1.-(edge-.035)/.03,0.,1.));
+ float dark=clamp((.55-lum)/.35,0.,1.);
+ // relief
+ float l1=dot(texture2D(T,uv+vec2(texel.x,0.)).rgb,vec3(.3,.59,.11)),l2=dot(texture2D(T,uv-vec2(texel.x,0.)).rgb,vec3(.3,.59,.11));
+ float l3=dot(texture2D(T,uv+vec2(0.,texel.y)).rgb,vec3(.3,.59,.11)),l4=dot(texture2D(T,uv-vec2(0.,texel.y)).rgb,vec3(.3,.59,.11));
+ vec2 g=vec2(l1-l2,l3-l4)*4.;vec2 L=vec2(-.6-.5*sy,-.7-.4*sx);
+ c+=clamp(dot(g,L),-.6,.6)*.22*(1.-.6*fm);
+ // pattern
+ vec2 q=vec2(u-pc.x,(v-pc.y)*1.5);float r=length(q)+1e-5;float th=atan(q.y,q.x);float P=0.;
+ if(pat<.5){float f=r*70.;float line=exp(-pow((f-floor(f+.5))/.09,2.));float seg=.5+.5*sin(th*7.+floor(f+.5)*2.3);P=line*sm(seg*1.6-.3);}
+ else if(pat<1.5){P=pow(abs(sin(th*36.)),18.)+.6*pow(abs(sin(th*36.+1.57)),40.);P*=clamp(r*4.,0.,1.);}
+ else{vec2 gp=uv*vec2(110.,165.);vec2 id=floor(gp);vec2 fp=fract(gp)-.5;float hh=h21(id);vec2 o=vec2(h21(id+3.1),h21(id+7.7))-.5;P=step(.55,hh)*exp(-dot(fp-o*.6,fp-o*.6)/.02)*hh*1.4;}
+ P=clamp(P,0.,1.)*(1.-prot);
+ float ph=(u*.9+v*.6)*2.2+sy*1.6-sx*1.1;float sheen=.18+.55*pow(max(sin(ph*3.14159),0.),2.);
+ c+=P*sheen*(.35+.65*dark)*tint*.55;
+ // holo
+ float hu=fract((u*1.2+v*.8)*1.6+sy*.9+sx*.6+10.);vec3 holo=hsv2rgb(vec3(hu,.75,1.));
+ float band=.5+.5*sin((u*1.4-v*.9+sy*1.3+sx*.7)*6.2832);
+ float ha=(.24*gold+.035+.10*P)*(.35+.65*band)*keep;
+ c=1.-(1.-clamp(c,0.,1.))*(1.-ha*holo);
+ // foil hotspot
+ vec2 hs=vec2(.5-.65*sy,.42-.55*sx);float hot=exp(-(pow((u-hs.x)/.32,2.)+pow((v-hs.y)/.26,2.)));
+ c+=gold*(.2+.8*hot)*.42*vec3(1.,.82,.45)*(c*.7+.3);
+ // glass sweep
+ float dd=(u*.75+v*.55)-(.65+.85*(.75*sy+.25*sx));
+ c+=(exp(-pow(dd/.035,2.))*.34+exp(-pow(dd/.14,2.))*.09+exp(-pow((dd-.09)/.012,2.))*.12)*(1.-.55*prot);
+ c=clamp(c,0.,1.);
+ // 4-point sparkles
+ for(int i=0;i<8;i++){vec4 s=sp[i];float k=cos(sy*cos(s.z)*2.4+sx*sin(s.z)*2.4+s.z*.7);float it=pow(max(k,0.),10.);
+  vec2 dv=(uv-s.xy)*vec2(1.,1.5)/(.053*s.w*(.6+.4*it));float ax=abs(dv.x),ay=abs(dv.y);
+  float arm=exp(-pow(ay/(.045+.06*(1.-ax)),2.))*pow(clamp(1.-ax,0.,1.),1.5)+exp(-pow(ax/(.045+.06*(1.-ay)),2.))*pow(clamp(1.-ay,0.,1.),1.5);
+  float rd=length(dv);float dg=(exp(-pow(abs(dv.x-dv.y)/.05,2.))+exp(-pow(abs(dv.x+dv.y)/.05,2.)))*clamp(1.-rd/.5,0.,1.);
+  float st=clamp(arm+.4*dg+exp(-rd*rd/.012)+.25*exp(-rd*rd/.08),0.,1.5)*it;
+  c=1.-(1.-c)*(1.-clamp(st*vec3(1.,.97,.85),0.,1.));}
+ c*=dim;
+ gl_FragColor=vec4(c*a,a);
+}`;
+const FS_EDGE=`precision highp float;varying vec3 vN;varying vec3 vW;uniform float dim;varying vec2 vUv;
+void main(){vec3 n=normalize(vN);vec3 L=normalize(vec3(-.55,.83,.6));float lam=.35+.65*max(dot(n,L),0.);
+ vec3 V=normalize(-vW+vec3(0.,0.,0.));vec3 Hh=normalize(L+normalize(vec3(0.,0.,1.)));float spc=pow(max(dot(n,Hh),0.),24.)*.7;
+ float band=.85+.15*cos(vUv.y*6.2832);vec3 base=vec3(.62,.48,.24);
+ vec3 c=clamp(base*lam*band*(.75+.25*(1.-vUv.y))+spc,0.,1.)*dim;gl_FragColor=vec4(c,1.);}`;
+function prog(vs,fs){const p=gl.createProgram();for(const [t,s] of [[gl.VERTEX_SHADER,vs],[gl.FRAGMENT_SHADER,fs]]){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(sh));gl.attachShader(p,sh)}gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));return p}
+const PF=prog(VS,FS),PE=prog(VS,FS_EDGE);
+
+// ---------- geometry (card 2 x 3, thickness) ----------
+const CW=2,CHh=3,TH=0.15,RAD=0.038*CW;
+function buf(arr){const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.STATIC_DRAW);return b}
+// front quad z=+TH/2 facing +z; back quad z=-TH/2 facing -z (uv mirrored so it reads correctly)
+const front=buf([-1,1.5,TH/2,0,0,0,0,1, 1,1.5,TH/2,1,0,0,0,1, -1,-1.5,TH/2,0,1,0,0,1, 1,-1.5,TH/2,1,1,0,0,1]);
+const back=buf([1,1.5,-TH/2,0,0,0,0,-1, -1,1.5,-TH/2,1,0,0,0,-1, 1,-1.5,-TH/2,0,1,0,0,-1, -1,-1.5,-TH/2,1,1,0,0,-1]);
+// side wall: rounded-rect outline, LAYERS rings -> continuous strip
+const LAYERS=8;const outl=[];{const w=1-RAD,h=1.5-RAD;for(const [cx,cy,a0] of [[w,h,0],[-w,h,90],[-w,-h,180],[w,-h,270]])for(let i=0;i<=10;i++){const a=(a0+9*i)*Math.PI/180;outl.push([cx+RAD*Math.cos(a),cy+RAD*Math.sin(a),Math.cos(a),Math.sin(a)])}}
+const side=[];for(let k=0;k<LAYERS;k++){const z0=TH/2-TH*k/LAYERS,z1=TH/2-TH*(k+1)/LAYERS;for(let i=0;i<outl.length;i++){const a=outl[i],b=outl[(i+1)%outl.length];const v0=k/LAYERS,v1=(k+1)/LAYERS;
+ const A=[a[0],a[1],z0,0,v0,a[2],a[3],0],B=[b[0],b[1],z0,0,v0,b[2],b[3],0],C=[a[0],a[1],z1,0,v1,a[2],a[3],0],D=[b[0],b[1],z1,0,v1,b[2],b[3],0];side.push(...A,...C,...B,...B,...C,...D)}}
+const sideB=buf(side),sideN=side.length/8;
+function bind(p,b){gl.bindBuffer(gl.ARRAY_BUFFER,b);for(const [nm,sz,off] of [['p',3,0],['uv',2,3],['n',3,5]]){const l=gl.getAttribLocation(p,nm);if(l<0)continue;gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,sz,gl.FLOAT,false,32,off*4)}}
+
+// ---------- textures ----------
+const texs={};let loaded=0;
+for(const k in TEX){const im=new Image();im.onload=()=>{const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);try{gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im)}catch(e){$('bot').textContent='本地直接打开 index.html 读不到贴图，请打开 card.html 或用本地服务器';$('bot').style.opacity=1;return}gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);texs[k]=t;loaded++};im.src=TEX[k]}
+
+// ---------- math ----------
+function mul(a,b){const o=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s}return o}
+const I4=()=>new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
+function rx(a){const c=Math.cos(a),s=Math.sin(a),m=I4();m[5]=c;m[6]=s;m[9]=-s;m[10]=c;return m}
+function ry(a){const c=Math.cos(a),s=Math.sin(a),m=I4();m[0]=c;m[2]=-s;m[8]=s;m[10]=c;return m}
+function rz(a){const c=Math.cos(a),s=Math.sin(a),m=I4();m[0]=c;m[1]=s;m[4]=-s;m[5]=c;return m}
+function tr(x,y,z){const m=I4();m[12]=x;m[13]=y;m[14]=z;return m}
+function sc(s){const m=I4();m[0]=m[5]=m[10]=s;return m}
+function persp(f,asp,n,fa){const t=1/Math.tan(f/2),m=new Float32Array(16);m[0]=t/asp;m[5]=t;m[10]=(fa+n)/(n-fa);m[11]=-1;m[14]=2*fa*n/(n-fa);return m}
+
+// ---------- state ----------
+let cur=0,slide=0,flip=[0,0,0],flipT=[0,0,0];
+let tY=0,tX=0,aY=0,aX=0,lastInput=-1e9,ptr=null,down=null,gyro=null,now=0,t0=null;
+const DEG=Math.PI/180;
+function setCard(i){cur=(i+3)%3;document.querySelectorAll('#dots i').forEach((e,j)=>e.classList.toggle('on',j===cur))}setCard(0);
+function go(d){const n=cur+d;slide+=0;setCard(n);slideTarget=cur}
+let slideTarget=0;
+$('prev').onclick=e=>{e.stopPropagation();go(-1)};$('next').onclick=e=>{e.stopPropagation();go(1)};
+addEventListener('keydown',e=>{if(e.key==='ArrowLeft')go(-1);if(e.key==='ArrowRight')go(1);if(e.key===' '||e.key==='Enter')doFlip()});
+function doFlip(){flipT[cur]+=180}
+function cardScreenRect(){const s=Math.min(W/2/1.18/2.2,H/3/1.3);return s}
+const curEl=$('cur');
+function onMove(x,y){ptr=[x,y];lastInput=now;tY=Math.max(-1,Math.min(1,(x/W-.5)*2.2))*17.5;tX=Math.max(-1,Math.min(1,-(y/H-.5)*2.2))*10.5;if(REC){curEl.style.left=x+'px';curEl.style.top=y+'px'}}
+gl_c.style.pointerEvents='none';
+addEventListener('pointermove',e=>{onMove(e.clientX,e.clientY);if(down&&Math.abs(e.clientX-down[0])>60&&!down[2]){down[2]=1;go(e.clientX<down[0]?1:-1)}});
+addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;down=[e.clientX,e.clientY,0,now];onMove(e.clientX,e.clientY);if(REC)curEl.classList.add('dn')});
+addEventListener('pointerup',e=>{if(REC)curEl.classList.remove('dn');if(!down)return;if(!down[2]&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<14)doFlip();down=null;if(e.pointerType!=='mouse')lastInput=now-1200});
+addEventListener('pointerleave',()=>{lastInput=now-1500});
+// gyro
+function onOri(e){if(e.beta==null)return;if(!gyro)gyro={b:e.beta,g:e.gamma};const g=(e.gamma-gyro.g),b=(e.beta-gyro.b);tY=Math.max(-17.5,Math.min(17.5,g*0.9));tX=Math.max(-10.5,Math.min(10.5,-b*0.6));lastInput=now}
+if(window.DeviceOrientationEvent){if(typeof DeviceOrientationEvent.requestPermission==='function'&&('ontouchstart' in window)){const b=$('gyro');b.style.display='block';b.onclick=e=>{e.stopPropagation();DeviceOrientationEvent.requestPermission().then(s=>{if(s==='granted'){addEventListener('deviceorientation',onOri);b.style.display='none'}}).catch(()=>{b.textContent='陀螺仪不可用'})}}else if('ontouchstart' in window)addEventListener('deviceorientation',onOri)}
+
+
+// ---------- particles ----------
+function rnd(s){return()=>{s=(s*16807)%2147483647;return s/2147483647}}
+const R=rnd(7);const BACKP=[...Array(90)].map(()=>({x:R(),y:R(),s:.6+R()*1.6,p:R(),q:R(),k:1+(R()*2|0),A:.008+R()*.03,a:.3+R()*.6}));
+const FRONTP=[...Array(16)].map(()=>({x:R(),y:R(),s:3+R()*6,p:R(),q:R(),k:1+(R()*2|0),A:.02+R()*.05,a:.18+R()*.3}));
+function drawParticles(ctx,arr,t,blur,tint){const m=Math.min(W,H);for(const p of arr){const ph=2*Math.PI*(t/8+p.p);const x=(p.x+p.A*.6*Math.sin(ph)+aY*.0006*(blur?3:-1))*W,y=(p.y+p.A*Math.cos(ph+p.q*6)+aX*.0006*(blur?3:-1))*H;
+ const tw=p.a*(.55+.45*Math.sin(2*Math.PI*(p.k*t/4+p.q)));const r=p.s*(blur?m/500:1)*DPR;
+ const g=ctx.createRadialGradient(x*DPR,y*DPR,0,x*DPR,y*DPR,r*(blur?1:3));g.addColorStop(0,`rgba(${tint},${tw})`);g.addColorStop(blur?.5:.25,`rgba(${tint},${tw*(blur?.5:.6)})`);g.addColorStop(1,`rgba(${tint},0)`);ctx.fillStyle=g;ctx.beginPath();ctx.arc(x*DPR,y*DPR,r*(blur?1:3),0,7);ctx.fill()}}
+const TINTS=['200,214,255','255,226,160','222,204,255'];
+
+// ---------- render ----------
+function drawCard(i,M,P,dim,tilt,showBack){
+ const c=showBack?BACK:CARDS[i];
+ gl.useProgram(PF);bind(PF,showBack?back:front);
+ gl.uniformMatrix4fv(gl.getUniformLocation(PF,'M'),false,M);gl.uniformMatrix4fv(gl.getUniformLocation(PF,'P'),false,P);
+ gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texs[showBack?'back':c.k]);gl.uniform1i(gl.getUniformLocation(PF,'T'),0);
+ gl.uniform2f(gl.getUniformLocation(PF,'tilt'),tilt[0],tilt[1]);gl.uniform4fv(gl.getUniformLocation(PF,'face'),c.face);
+ gl.uniform1f(gl.getUniformLocation(PF,'pat'),c.pat);gl.uniform2fv(gl.getUniformLocation(PF,'pc'),c.pc);gl.uniform3fv(gl.getUniformLocation(PF,'tint'),c.tint);
+ gl.uniform4fv(gl.getUniformLocation(PF,'sp'),new Float32Array(c.sp.flat()));gl.uniform1f(gl.getUniformLocation(PF,'dim'),dim);gl.uniform2f(gl.getUniformLocation(PF,'texel'),1/768,1/1152);
+ gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+let slidePos=0;
+function frame(ts){
+ if(t0===null)t0=ts;now=ts-t0;const t=now/1000;
+ if(loaded<4){requestAnimationFrame(frame);return}
+ // auto sway when idle (same harmonics as the GIF)
+ const idle=Math.min(1,Math.max(0,(now-lastInput-1500)/1200));
+ const a=2*Math.PI*t/2.18;
+ const sY=17.5*Math.sin(a),sX=10.5*Math.sin(a+1.9),sZ=2*Math.sin(2*a+.4),hov=Math.sin(2*a+.9);
+ const gY=tY*(1-idle)+sY*idle,gX=tX*(1-idle)+sX*idle;
+ const kk=1-Math.pow(.001,1/60*(REC?1:1));aY+=(gY-aY)*.12;aX+=(gX-aX)*.12;
+ // slide anim (shortest wrap)
+ let d=cur-slidePos;if(d>1.5)d-=3;if(d<-1.5)d+=3;slidePos+=d*.14;slidePos=((slidePos%3)+3)%3;
+ for(let i=0;i<3;i++)flip[i]+=(flipT[i]-flip[i])*.1;
+ // background
+ const bw=bg.width,bh=bg.height;const g=bx.createRadialGradient(bw/2,bh*.46,0,bw/2,bh*.46,Math.max(bw,bh)*.75);g.addColorStop(0,'#16131f');g.addColorStop(1,'#040307');bx.fillStyle=g;bx.fillRect(0,0,bw,bh);
+ drawParticles(bx,BACKP,t,false,TINTS[cur]);
+ // camera & scale: fit card (3 units tall) into viewport
+ const asp=W/H;const P=persp(28*DEG,asp,.5,60);const camZ=Math.max(9.2,9.2*.78/asp*1.0);
+ const fitZ=Math.max(9.6,(2.6/asp)/Math.tan(14*DEG)*0.62);
+ // floor shadow
+ const sh=bx.createRadialGradient(bw/2,bh*.86,0,bw/2,bh*.86,bw*.3);sh.addColorStop(0,`rgba(0,0,0,${.55-hov*.12})`);sh.addColorStop(1,'rgba(0,0,0,0)');bx.save();bx.translate(bw/2,bh*.86);bx.scale(1,.12);bx.translate(-bw/2,-bh*.86);bx.fillStyle=sh;bx.fillRect(0,0,bw,bh);bx.restore();
+ gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+ for(let i=0;i<3;i++){
+  let off=i-slidePos;if(off>1.5)off-=3;if(off<-1.5)off+=3;if(Math.abs(off)>1.2)continue;
+  const sp=asp<.8?3.2:2.75;const x=off*sp,s=1-Math.min(1,Math.abs(off))*.22,dim=1-Math.min(1,Math.abs(off))*.55;
+  const fl=flip[i]*DEG;const yawExtra=-off*28*DEG;
+  const M=mul(tr(x,.12+hov*.1,-fitZ-Math.abs(off)*1.2),mul(sc(s),mul(rz(sZ*DEG*(i===cur?1:.3)),mul(rx(-aX*DEG),mul(ry(aY*DEG+fl+yawExtra),I4())))));
+  const showBack=Math.cos(aY*DEG+fl+yawExtra)<0;
+  const tilt=[showBack?-aY/17.5:aY/17.5,aX/10.5];
+  gl.useProgram(PE);bind(PE,sideB);gl.uniformMatrix4fv(gl.getUniformLocation(PE,'M'),false,M);gl.uniformMatrix4fv(gl.getUniformLocation(PE,'P'),false,P);gl.uniform1f(gl.getUniformLocation(PE,'dim'),dim);gl.drawArrays(gl.TRIANGLES,0,sideN);
+  drawCard(i,M,P,dim,tilt,false);drawCard(i,M,P,dim,tilt,true);
+ }
+ fx.clearRect(0,0,fg.width,fg.height);drawParticles(fx,FRONTP,t,true,'255,236,200');
+ requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__api={ready:()=>loaded>=4,go,flip:doFlip,state:()=>({cur,aY,aX,flip:flipT.slice()})};
+window.addEventListener('error',e=>{window.__err=(window.__err||[]).concat(String(e.message))});
+})();
+</script>
+</body>
+</html>

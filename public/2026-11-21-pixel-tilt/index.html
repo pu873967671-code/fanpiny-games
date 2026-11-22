@@ -1,0 +1,119 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>狐兔糖果倾斜迷宫</title>
+<style>html,body{margin:0;height:100%;background:#2a1d3a;display:flex;align-items:center;justify-content:center}
+canvas{width:min(100vw,177.7vh);image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;cursor:crosshair}</style>
+<canvas id=c width=320 height=180></canvas>
+<script src="kit_sprites.js"></script>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');ctx.imageSmoothingEnabled=false;const W=320,H=180;
+const M=["###############","#S    #       #","# ### # ##### #","#   #   #   # #","### ##### # # #","#     #   #   #","# ### # ####  #","#   #       # #","### ######### #","#            G#","###############"];
+const CS=10,GW=15,GH=11,BX=146,BY=34; // 木盘左上
+const holes=[[12,6],[8,5]],shoeCells=[[3,3],[11,5],[5,9]];
+let shoes=shoeCells.map(c=>({x:c[0],y:c[1],got:0}));
+const C={bg:'#2a1d3a',bg2:'#3b2a52',wood:'#c98f52',wood2:'#b07640',wood3:'#8f5a30',woodD:'#6b3f2e',floor:'#f1d3a2',floor2:'#e6c08a',wallT:'#a8663a',wallS:'#5a3322',hole:'#2a1a22',hole2:'#4a2a34',ball:'#ff8fb4',ballH:'#fff0f6',ballS:'#c25a86'};
+let T=0,tilt={x:0,y:0},tgt={x:0,y:0},ball,state='play',fall=0,won=0,collected=0,conf=[],fx=[],msg=null;
+const fox={mood:0,mt:0};
+function reset(){ball={x:BX+1.5*CS,y:BY+1.5*CS,vx:0,vy:0};state='play';fall=0}
+reset();
+let audio=null;function beep(f,d,t='square',v=.05,f2){try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();const o=audio.createOscillator(),g=audio.createGain();o.type=t;o.frequency.value=f;if(f2)o.frequency.linearRampToValueAtTime(f2,audio.currentTime+d);g.gain.value=v;g.gain.exponentialRampToValueAtTime(.0001,audio.currentTime+d);o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+function R(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),w,h)}
+function P(x,y,c){R(x,y,1,1,c)}
+function wallAt(cx,cy){if(cx<0||cy<0||cx>=GW||cy>=GH)return true;return M[cy][cx]==='#'}
+function step(){
+ // 倾斜平滑，量化到 -2..2 的整数档用于视觉
+ tilt.x+=(tgt.x-tilt.x)*.18;tilt.y+=(tgt.y-tilt.y)*.18;
+ if(state==='play'){
+  ball.vx+=tilt.x*.09;ball.vy+=tilt.y*.09;ball.vx*=.985;ball.vy*=.985;
+  const r=3.2;
+  // x
+  ball.x+=ball.vx;let hit=false;
+  for(let cy=Math.floor((ball.y-r-BY)/CS);cy<=Math.floor((ball.y+r-BY)/CS);cy++)for(let cx=Math.floor((ball.x-r-BX)/CS);cx<=Math.floor((ball.x+r-BX)/CS);cx++){if(wallAt(cx,cy)){const l=BX+cx*CS,t=BY+cy*CS;if(ball.x+r>l&&ball.x-r<l+CS&&ball.y+r>t&&ball.y-r<t+CS){if(ball.vx>0)ball.x=l-r;else ball.x=l+CS+r;if(Math.abs(ball.vx)>.5){beep(180,.04,'square',.03);}ball.vx*=-.35;hit=true}}}
+  ball.y+=ball.vy;
+  for(let cy=Math.floor((ball.y-r-BY)/CS);cy<=Math.floor((ball.y+r-BY)/CS);cy++)for(let cx=Math.floor((ball.x-r-BX)/CS);cx<=Math.floor((ball.x+r-BX)/CS);cx++){if(wallAt(cx,cy)){const l=BX+cx*CS,t=BY+cy*CS;if(ball.x+r>l&&ball.x-r<l+CS&&ball.y+r>t&&ball.y-r<t+CS){if(ball.vy>0)ball.y=t-r;else ball.y=t+CS+r;if(Math.abs(ball.vy)>.5){beep(180,.04,'square',.03);}ball.vy*=-.35}}}
+  // 洞
+  for(const h of holes){const hx=BX+h[0]*CS+5,hy=BY+h[1]*CS+5;const d=Math.hypot(ball.x-hx,ball.y-hy);if(d<2.4){state='fall';fall=0;ball.x=hx;ball.y=hy;fox.mood=2;fox.mt=70;beep(500,.4,'triangle',.06,90);say('呜哇！',60)}}
+  // 鞋
+  for(const s of shoes){if(!s.got){const sx=BX+s.x*CS+5,sy=BY+s.y*CS+5;if(Math.hypot(ball.x-sx,ball.y-sy)<5){s.got=1;collected++;fox.mood=1;fox.mt=50;beep(988,.08,'square',.05);beep(1319,.18,'square',.05);for(let i=0;i<10;i++)fx.push({x:sx,y:sy,vx:(Math.random()-.5)*2,vy:-Math.random()*1.8-.4,l:26,c:['#ffe27a','#fff6c0','#ff8fb4'][i%3]});say(collected+'/3 糖果鞋',60)}}}
+  // 终点
+  const gx=BX+13*CS+5,gy=BY+9*CS+5;if(Math.hypot(ball.x-gx,ball.y-gy)<4.5&&collected<3){if(!msg||msg.t<=0)say('先收齐3只鞋',50)}
+  if(Math.hypot(ball.x-gx,ball.y-gy)<4.5&&collected>=3){state='win';won=0;fox.mood=1;fox.mt=9999;[523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.18,'square',.05),i*110));say(collected>=3?'满分！':'到啦~',9999);for(let i=0;i<60;i++)conf.push({x:gx,y:gy,vx:(Math.random()-.5)*3,vy:-Math.random()*3-1,l:60+Math.random()*30,c:['#ff8fb4','#ffe27a','#8fd4ff','#a0e08a','#fff'][i%5]})}
+ }else if(state==='fall'){fall++;if(fall>50){reset();for(const s of shoes)if(s.got&&false)s.got=0}}
+ else if(state==='win'){won++;if(won>200){shoes.forEach(s=>s.got=0);collected=0;fox.mood=0;fox.mt=0;msg=null;reset()}}
+ if(fox.mt>0&&fox.mt<9999){fox.mt--;if(!fox.mt)fox.mood=0}
+ for(const p of fx){p.x+=p.vx;p.y+=p.vy;p.vy+=.06;p.l--}for(let i=fx.length-1;i>=0;i--)if(fx[i].l<=0)fx.splice(i,1);
+ for(const p of conf){p.x+=p.vx;p.y+=p.vy;p.vy+=.05;p.l--}for(let i=conf.length-1;i>=0;i--)if(conf[i].l<=0)conf.splice(i,1);
+ if(msg)msg.t--;T++}
+function say(s,n){msg={s,t:n}}
+function tq(v){return Math.round(v*2)} // -2..2
+function drawShoe(x,y,bob){ // 8x7 糖果鞋
+ const p=["..PPP...",".PWPPP..","PPPPPPP.","PPPPPPPP","BBBBBBBB","BBBBBBBB"];const col={P:'#ff8fb4',W:'#fff0f6',B:'#fff1da'};
+ p.forEach((r,j)=>[...r].forEach((ch,i)=>{if(ch!=='.')P(x-4+i,y-3+j+bob,col[ch])}));
+ for(let i=0;i<8;i++)P(x-4+i,y+3+bob,'#b05a45');P(x-1,y-4+bob,'#85b83f')}
+function render(){
+ R(0,0,W,H,C.bg);for(let y=0;y<H;y+=12)for(let x=((y/12)%2)*12;x<W;x+=24)R(x,y,12,12,C.bg2);
+ const ox=-tq(tilt.x),oy=-tq(tilt.y); // 墙高视差偏移 -2..2
+ // 木盘（外框 3 层）+ 阴影
+ R(BX-8+3,BY-8+4,GW*CS+16,GH*CS+16,'#1d1228');
+ R(BX-8,BY-8,GW*CS+16,GH*CS+16,C.woodD);R(BX-7,BY-7,GW*CS+14,GH*CS+14,C.wood3);R(BX-5,BY-5,GW*CS+10,GH*CS+10,C.wood);R(BX-3,BY-3,GW*CS+6,GH*CS+6,C.wood2);
+ R(BX,BY,GW*CS,GH*CS,C.floor);
+ for(let y=0;y<GH;y++)for(let x=0;x<GW;x++)if((x+y)%2===0&&!wallAt(x,y))R(BX+x*CS,BY+y*CS,CS,CS,C.floor2);
+ // 洞
+ for(const h of holes){const hx=BX+h[0]*CS+5,hy=BY+h[1]*CS+5;R(hx-3,hy-1,7,3,C.hole);R(hx-2,hy-2,5,5,C.hole);R(hx-1,hy-3,3,7,C.hole);R(hx-1,hy-1,2,2,C.hole2)}
+ // 终点
+ const gx=BX+13*CS,gy=BY+9*CS;R(gx+1,gy+1,8,8,'#ffe27a');R(gx+3,gy+3,4,4,'#fff6c0');if((T>>4)%2)P(gx+5,gy+5,'#fff');
+ // 糖果鞋
+ for(const s of shoes)if(!s.got)drawShoe(BX+s.x*CS+5,BY+s.y*CS+5,((T>>4)+s.x)%2);
+ // 球影
+ R(ball.x-3,ball.y+2,7,3,'#c9a36e');
+ if(state!=='fall'||fall<30){const f=state==='fall'?Math.max(0,3-(fall>>3)):3;const bx=Math.round(ball.x),by=Math.round(ball.y);
+  if(f>=3){R(bx-3,by-1,7,3,C.ball);R(bx-2,by-2,5,5,C.ball);R(bx-1,by-3,3,7,C.ball);R(bx-2,by+1,5,2,C.ballS);R(bx-2,by-2,2,1,C.ballH);P(bx-2,by-1,C.ballH)}
+  else if(f===2){R(bx-2,by-1,5,3,C.ball);R(bx-1,by-2,3,5,C.ball);P(bx-1,by-1,C.ballH)}
+  else if(f===1){R(bx-1,by-1,3,3,C.ball)}}
+ // 墙：顶面向倾斜反方向偏移（3px 高度），先画侧面再画顶面
+ for(let y=0;y<GH;y++)for(let x=0;x<GW;x++)if(wallAt(x,y)){const l=BX+x*CS,t=BY+y*CS;
+  const n=(dx,dy)=>wallAt(x+dx,y+dy);
+  // 侧面（从底到顶面的连接）
+  const steps=3;for(let k=0;k<steps;k++){const dx=Math.round(ox*(k+1)/steps),dy=Math.round(oy*(k+1)/steps)+ -0; R(l+dx,t+dy,CS,CS,k===steps-1?C.wallT:C.wallS)}}
+ for(let y=0;y<GH;y++)for(let x=0;x<GW;x++)if(wallAt(x,y)){const l=BX+x*CS+ox,t=BY+y*CS+oy;R(l,t,CS,CS,C.wallT);R(l,t,CS,1,'#d79258');if(!wallAt(x,y+1)||true){}}
+ // 顶面描边高光 + 内阴影
+ for(let y=0;y<GH;y++)for(let x=0;x<GW;x++)if(wallAt(x,y)){const l=BX+x*CS+ox,t=BY+y*CS+oy;if(!wallAt(x,y+1))R(l,t+CS-2,CS,2,C.wallS);if(!wallAt(x+1,y))R(l+CS-1,t,1,CS,C.wallS)}
+ // 球被墙遮：球在墙的前方时重画（简单：画球高光点）
+ // 左侧狐兔面板
+ R(14,56,100,84,'#4a3566');R(14,56,100,1,'#6a4a88');R(14,139,100,1,'#2a1d3a');
+ let o={tail:(T>>4)%4,ear:(T>>5)%3,eye:(T%160)<6?1:0,mouth:0};
+ if(fox.mood===1){o.eye=2;o.mouth=2}else if(fox.mood===2){o.eye=3;o.mouth=3}
+ else{ // 眼睛看向球的方向：用 mouth/眼不变，身体左右贴近
+ }
+ let fy=130,dy=0;if(state==='win'){dy=-(Math.abs(Math.sin(won/6))*6|0);o.leg=3;}
+ if(fox.mood===2)o.ear=1;
+ R(64-7,fy,14,2,'#2f2244');Fox.draw(ctx,64,fy+dy,o,1);
+ // 瞳孔偏移：根据球 x 位置在脸上叠一个像素
+ const bx0=(ball.x-BX)/ (GW*CS)-.5;if(fox.mood===0&&!o.eye){const sh=bx0>0.15?1:(bx0<-.15?-1:0);if(sh){ctx.fillStyle='#fff';ctx.fillRect(64-16+10+1+(sh>0?1:0)-1,fy-30+11+0,0,0)}}
+ // UI
+ ctx.font='8px monospace';ctx.textBaseline='top';ctx.fillStyle='#ffe9b0';ctx.fillText('糖果鞋 '+collected+'/3',16,12);for(let i=0;i<3;i++){if(i<collected)drawShoe(30+i*12,34,0);else{R(26+i*12,32,8,6,'#5a4478')}}
+ if(msg&&msg.t>0){const t=msg.s,w=t.length*8+10;const x=64-w/2|0,y=fy-52;R(x,y,w,12,'#fff6e4');R(x,y,w,1,'#6b3f2e');R(x,y+11,w,1,'#6b3f2e');R(x,y,1,12,'#6b3f2e');R(x+w-1,y,1,12,'#6b3f2e');ctx.fillStyle='#4a2f2a';ctx.fillText(t,x+5,y+2)}
+ for(const p of fx)R(p.x,p.y,1,1,p.c);for(const p of conf)R(p.x,p.y,2,2,p.c);
+ // 提示
+ if(T<200){ctx.fillStyle='#fff';ctx.fillText('移动鼠标/手指倾斜木盘',150,168)}
+}
+function tiltFrom(px,py){tgt.x=Math.max(-1,Math.min(1,(px-W*.6)/70));tgt.y=Math.max(-1,Math.min(1,(py-H/2)/50))}
+cv.addEventListener('pointermove',e=>{const r=cv.getBoundingClientRect();tiltFrom((e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H)});
+cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();tiltFrom((e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H)});
+cv.addEventListener('pointerleave',()=>{tgt.x=0;tgt.y=0});
+const keys={};addEventListener('keydown',e=>{keys[e.key]=1;kk()});addEventListener('keyup',e=>{keys[e.key]=0;kk()});
+function kk(){tgt.x=(keys.ArrowRight||keys.d?1:0)-(keys.ArrowLeft||keys.a?1:0);tgt.y=(keys.ArrowDown||keys.s?1:0)-(keys.ArrowUp||keys.w?1:0)}
+// 自动演示：沿 BFS 路径倾斜（录屏用）
+function bfs1(s,g){const q=[s],prev={[s.join()]:null};const hs=new Set(holes.map(h=>h.join()));while(q.length){const[x,y]=q.shift();if(x===g[0]&&y===g[1])break;for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+dx,ny=y+dy,k=nx+','+ny;if(!wallAt(nx,ny)&&!(k in prev)&&!hs.has(k)){prev[k]=[x,y];q.push([nx,ny])}}}
+ const path=[];let c=g;while(c){path.unshift(c);c=prev[c.join()]}return path}
+function bfs(){const pts=[[1,1],[3,3],[5,9],[11,5],[13,9]];let all=[];for(let i=0;i<pts.length-1;i++){const p=bfs1(pts[i],pts[i+1]);all=all.concat(i?p.slice(1):p)}return all}
+let ap=null,api=0;
+function autopilot(on){ap=on?bfs():null;api=0}
+function apStep(){if(!ap||state!=='play')return;const cx=(ball.x-BX)/CS,cy=(ball.y-BY)/CS;let tx=ap[Math.min(api,ap.length-1)];
+ while(api<ap.length-1&&Math.hypot(cx-(tx[0]+.5),cy-(tx[1]+.5))<.45){api++;tx=ap[api]}
+ const dx=(tx[0]+.5-cx)*CS,dy=(ty=tx[1]+.5-cy)*CS;var ty;tgt.x=Math.max(-1,Math.min(1,dx*.12-ball.vx*.9));tgt.y=Math.max(-1,Math.min(1,dy*.12-ball.vy*.9))}
+window.__api={autopilot,state:()=>({state,collected,ball,api}),tgt,go:n=>{for(let i=0;i<n;i++){apStep();step()}render()},tilt:(x,y)=>{tgt.x=x;tgt.y=y},warp:(cx,cy)=>{ball.x=BX+cx*CS+5;ball.y=BY+cy*CS+5;ball.vx=ball.vy=0}};
+window.__step=n=>window.__api.go(n);
+window.__manual=/manual/.test(location.search);
+function loop(){if(!window.__manual){apStep();step();render();requestAnimationFrame(loop)}}
+render();if(!window.__manual)requestAnimationFrame(loop);
+</script></html>

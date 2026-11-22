@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>狐兔拼布被 · 缝一床被子去睡觉</title>
+<style>
+html,body{margin:0;height:100%;background:#2b1d16;overflow:hidden;font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+#page{position:absolute;box-shadow:0 10px 40px rgba(0,0,0,.5);border-radius:14px;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#ui{position:absolute;left:0;right:0;top:10px;display:flex;justify-content:center;gap:10px;pointer-events:none}
+.pill{pointer-events:auto;background:rgba(255,246,228,.92);color:#6b3d20;border:2px solid #b8794a;border-radius:999px;padding:7px 15px;font-size:15px;font-weight:700;box-shadow:0 3px 0 #8a5432;cursor:pointer}
+.pill:active{transform:translateY(2px);box-shadow:0 1px 0 #8a5432}
+#count{cursor:default}
+#hint{position:absolute;left:0;right:0;bottom:12px;text-align:center;color:#fff6e4;font-size:15px;text-shadow:0 1px 3px #000a;pointer-events:none;transition:opacity .6s}
+</style></head><body>
+<div id="page"><canvas id="cv"></canvas>
+<div id="ui"><span class="pill" id="count">已缝 0 / 12</span><span class="pill" id="auto">一键缝好</span><span class="pill" id="reset">再缝一床</span></div>
+<div id="hint">把地上的布块拖到被子上（或点一下），狐兔会帮你缝上</div></div>
+<script>
+const W=1312,H=1199;
+const Q={x:394,y:372,w:527,h:642},COLS=3,ROWS=4,CW=Q.w/COLS,CH=Q.h/ROWS;
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),page=document.getElementById('page');
+let DPR=1;
+function fit(){const vw=innerWidth,vh=innerHeight,s=Math.min(vw/W,vh/H);const w=W*s,h=H*s;
+ page.style.width=w+'px';page.style.height=h+'px';page.style.left=(vw-w)/2+'px';page.style.top=(vh-h)/2+'px';
+ DPR=Math.min(2,devicePixelRatio||1);cv.width=Math.round(w*DPR);cv.height=Math.round(h*DPR);}
+addEventListener('resize',fit);fit();
+const SRC={bed:'bed.webp',sew:'sew.webp',sleep:'sleep.webp',hop:'hop.webp',needle:'i_needle.webp',spool:'i_spool.webp',
+ moon:'i_moon.webp',s0:'i_s0.webp',s1:'i_s1.webp',s2:'i_s2.webp',b0:'i_b0.webp',b1:'i_b1.webp',b2:'i_b2.webp',b3:'i_b3.webp',thimble:'i_thimble.webp'};
+for(let i=0;i<12;i++)SRC['p'+i]='p'+i+'.webp';
+const IM={};let loaded=0;const NIM=Object.keys(SRC).length;
+for(const k in SRC){const im=new Image();im.onload=()=>{if(++loaded===NIM)start()};im.src=(window.__ASSETS&&__ASSETS[SRC[k]])||SRC[k];IM[k]=im;}
+const SEQ={sew:[444,430],sleep:[446,381],hop:[443,443]};
+const rnd=(a,b)=>a+Math.random()*(b-a),clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t;
+const easeOutBack=t=>{const c=1.7;return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)};
+const HOME=[[95,725],[270,735],[100,865],[275,860],[95,1005],[270,1010],[100,1140],[275,1135],[1000,1110],[1140,1132],[1262,1100],[1215,770]];
+const SMALL=0.55; // 地上布块比例（相对格子）
+let patches,cells,buttons,parts,stitchers,state,T=0,last=null,kit,drag=null;
+function reset(){
+ const order=[...Array(12).keys()].sort(()=>Math.random()-.5);
+ patches=order.map((pi,i)=>({img:IM['p'+pi],x:HOME[i][0],y:HOME[i][1],hx:HOME[i][0],hy:HOME[i][1],hr:rnd(-.35,.35),r:0,w:0,s:SMALL,ts:SMALL,cell:-1,st:'home',vx:0,vy:0,fly:null,puff:0,bob:rnd(0,6)}));
+ patches.forEach(p=>p.r=p.hr);
+ cells=Array(12).fill(null);buttons=[];parts=[];stitchers=[];
+ state={phase:'play',t0:0,night:0,done:0};
+ kit={mode:'idle',f:0,react:0,bounce:0};
+ document.getElementById('hint').style.opacity=1;upd();
+}
+function upd(){document.getElementById('count').textContent='已缝 '+cells.filter(c=>c&&c.sewn).length+' / 12'}
+function cellRect(i){const c=i%COLS,r=(i/COLS)|0;return {x:Q.x+c*CW,y:Q.y+r*CH,w:CW,h:CH,cx:Q.x+(c+.5)*CW,cy:Q.y+(r+.5)*CH}}
+function nearestEmpty(x,y,maxD){let best=-1,bd=maxD||1e9;for(let i=0;i<12;i++){if(cells[i])continue;const c=cellRect(i),d=Math.hypot(c.cx-x,c.cy-y);if(d<bd){bd=d;best=i}}return best}
+// ---- 输入 ----
+function toStage(e){const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H]}
+function hitPatch(x,y){for(let i=patches.length-1;i>=0;i--){const p=patches[i];if(p.st!=='home')continue;const hw=CW*p.s/2+8,hh=CH*p.s/2+8;
+ const dx=x-p.x,dy=y-p.y,c=Math.cos(-p.r),s=Math.sin(-p.r),lx=dx*c-dy*s,ly=dx*s+dy*c;if(Math.abs(lx)<hw&&Math.abs(ly)<hh)return p}return null}
+cv.addEventListener('pointerdown',e=>{const [x,y]=toStage(e);
+ if(state.phase!=='play'){if(state.phase==='sleep'&&Math.hypot(x-657,y-290)<170){state.poke=T;burst(657,250,'heart')}return}
+ const p=hitPatch(x,y);
+ if(p){cv.setPointerCapture(e.pointerId);drag={p,ox:p.x-x,oy:p.y-y,sx:x,sy:y,lx:x,lvx:0,moved:0};p.st='drag';patches.splice(patches.indexOf(p),1);patches.push(p);
+  document.getElementById('hint').style.opacity=0;return}
+ if(Math.hypot(x-KX,y-(KY-150))<120){kit.react=T;kit.bounce=1;burst(KX,KY-260,'star')}
+});
+cv.addEventListener('pointermove',e=>{if(!drag)return;const [x,y]=toStage(e);const p=drag.p;
+ drag.moved=Math.max(drag.moved,Math.hypot(x-drag.sx,y-drag.sy));p.x=x+drag.ox;p.y=y+drag.oy;});
+function endDrag(e){if(!drag)return;const p=drag.p;const click=drag.moved<10;drag=null;
+ const inQ=p.x>Q.x-60&&p.x<Q.x+Q.w+60&&p.y>Q.y-60&&p.y<Q.y+Q.h+60;
+ let ci=click?nearestEmpty(p.x,p.y):(inQ?nearestEmpty(p.x,p.y,260):-1);
+ if(ci>=0)place(p,ci,click);else{p.st='back';p.fly={t0:T,d:.45,x0:p.x,y0:p.y,x1:p.hx,y1:p.hy,arc:-60}}}
+cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
+function place(p,ci,arc){cells[ci]=p;p.cell=ci;p.st='fly';const c=cellRect(ci);
+ p.fly={t0:T,d:arc?.65:.28,x0:p.x,y0:p.y,x1:c.cx,y1:c.cy,arc:arc?-170:0,toCell:true};}
+document.getElementById('auto').onclick=()=>{if(state.phase!=='play')return;let k=0;
+ patches.filter(p=>p.st==='home').forEach(p=>{const ci=nearestEmpty(p.x,p.y);if(ci<0)return;cells[ci]=p;p.cell=ci;
+  p.st='wait';p.wait=T+k*.22;k++});document.getElementById('hint').style.opacity=0};
+document.getElementById('reset').onclick=()=>reset();
+// ---- 缝线 ----
+function perim(c){const i=8,x0=c.x+i,y0=c.y+i,x1=c.x+c.w-i,y1=c.y+c.h-i;return [[x0,y0],[x1,y0],[x1,y1],[x0,y1],[x0,y0]]}
+function ptAt(pts,u){let L=0;const seg=[];for(let k=0;k<4;k++){const l=Math.hypot(pts[k+1][0]-pts[k][0],pts[k+1][1]-pts[k][1]);seg.push(l);L+=l}
+ let d=u*L;for(let k=0;k<4;k++){if(d<=seg[k]){const t=d/seg[k];return [lerp(pts[k][0],pts[k+1][0],t),lerp(pts[k][1],pts[k+1][1],t),k]}d-=seg[k]}return [pts[4][0],pts[4][1],3]}
+function startSew(p){const c=cellRect(p.cell);stitchers.push({p,c,pts:perim(c),t0:T,d:1.7,done:false,start:Math.floor(Math.random()*4)});}
+function burst(x,y,kind){for(let i=0;i<(kind==='heart'?6:12);i++){const a=rnd(0,Math.PI*2),v=rnd(80,260);parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-120,t0:T,life:rnd(.7,1.2),kind,r:rnd(0,6),vr:rnd(-6,6),s:rnd(.5,1)})}}
+function fluff(x,y){for(let i=0;i<3;i++)parts.push({x,y,vx:rnd(-60,60),vy:rnd(-90,-20),t0:T,life:rnd(.5,.9),kind:'fluff',r:0,vr:0,s:rnd(.6,1.2)})}
+// ---- 狐兔位置 ----
+const KX=185,KY=640,KS=0.66; // 坐在地毯上（脚底）
+const BEDX=657,BEDY=445,SS=0.78;  // 睡觉：头像底边被被子盖住
+function finishAll(){state.phase='cheer';state.t0=T;kit.mode='cheer';burst(KX,KY-250,'star');burst(Q.x+Q.w/2,Q.y+Q.h/2,'btn')}
+// ---- 主循环 ----
+function frame(ts){requestAnimationFrame(frame);if(last===null)last=ts;let dt=Math.min(.05,(ts-last)/1000);last=ts;T+=dt;update(dt);draw()}
+function update(dt){
+ for(const p of patches){
+  if(p.st==='wait'&&T>=p.wait){p.st='fly0'}
+  if(p.st==='fly0'){p.st='fly';const c=cellRect(p.cell);p.fly={t0:T,d:.65,x0:p.x,y0:p.y,x1:c.cx,y1:c.cy,arc:-170,toCell:true}}
+  if(p.st==='drag'){const ax=(p.x-(p.px??p.x))/Math.max(dt,1e-3);// 速度
+   const acc=(ax-(p.pvx??0));p.pvx=ax;p.px=p.x;
+   // 刚体摆：被抓住的顶边，水平加速度产生力矩
+   p.w+=(-acc*0.00022-p.r*38)*dt;p.w*=Math.pow(0.04,dt);p.r+=p.w*dt;p.r=clamp(p.r,-.7,.7);
+   const over=p.x>Q.x-40&&p.x<Q.x+Q.w+40&&p.y>Q.y-40&&p.y<Q.y+Q.h+40;p.ts=over?0.96:0.62;
+  } else {p.px=p.x;p.pvx=0}
+  if(p.fly){const f=p.fly,u=clamp((T-f.t0)/f.d,0,1),e=1-Math.pow(1-u,3);
+   p.x=lerp(f.x0,f.x1,e);p.y=lerp(f.y0,f.y1,e)+f.arc*Math.sin(Math.PI*u);
+   if(f.toCell){p.ts=1;p.r=lerp(p.r,Math.sin(u*Math.PI*3)*0.25*(1-u),0.3);if(u>=1){p.r=0;p.st='placed';p.fly=null;p.puff=1;startSew(p);fluff(p.x,p.y)}}
+   else{p.ts=SMALL;p.r=lerp(p.r,p.hr,.2);if(u>=1){p.st='home';p.fly=null;p.r=p.hr;p.puff=.6}}}
+  if(p.st==='home'){p.ts=SMALL;p.w+=(-(p.r-p.hr)*30)*dt;p.w*=Math.pow(0.05,dt);p.r+=p.w*dt}
+  p.s=lerp(p.s,p.ts,1-Math.pow(0.0005,dt));p.puff=Math.max(0,p.puff-dt*2.2);
+ }
+ for(const s of stitchers){if(s.done)continue;const u=(T-s.t0)/s.d;
+  if(Math.floor(u*28)!==s.lastK&&u<1){s.lastK=Math.floor(u*28);if(s.lastK%3===0){const q=ptAt(s.pts,((u+s.start/4)%1));fluff(q[0],q[1])}}
+  if(u>=1){s.done=true;cells[s.p.cell].sewn=true;s.p.puff=1.2;kit.react=T;burst(s.c.cx,s.c.cy,'star');
+   // 在格子角上钉一颗扣子（被子打结）
+   const corners=[[s.c.x,s.c.y],[s.c.x+s.c.w,s.c.y],[s.c.x,s.c.y+s.c.h],[s.c.x+s.c.w,s.c.y+s.c.h]].filter(q=>q[0]>Q.x+2&&q[0]<Q.x+Q.w-2&&q[1]>Q.y+2&&q[1]<Q.y+Q.h-2&&!buttons.some(b=>Math.hypot(b.x-q[0],b.y-q[1])<5));
+   if(corners.length){const q=corners[(Math.random()*corners.length)|0];buttons.push({x:q[0],y:q[1],img:IM['b'+((Math.random()*4)|0)],t0:T,r:rnd(-.5,.5)})}
+   upd();if(cells.every(c=>c&&c.sewn)&&state.phase==='play'){state.phase='wait';state.t0=T}}}
+ if(state.phase==='wait'&&T-state.t0>.5)finishAll();
+ if(state.phase==='cheer'&&T-state.t0>1.4){state.phase='hop';state.t0=T}
+ if(state.phase==='hop'&&T-state.t0>1.5){state.phase='sleep';state.t0=T;state.flop=T;fluff(BEDX-120,Q.y+30);fluff(BEDX+120,Q.y+30);fluff(BEDX,Q.y+20)}
+ if(state.phase==='sleep')state.night=clamp((T-state.t0-.6)/2,0,1);else state.night=Math.max(0,state.night-dt);
+ for(const q of parts){q.vy+=(q.kind==='fluff'?40:520)*dt;q.x+=q.vx*dt;q.y+=q.vy*dt;q.r+=q.vr*dt}
+ parts=parts.filter(q=>T-q.t0<q.life);
+ kit.bounce=Math.max(0,kit.bounce-dt*3);
+}
+function drawImg(im,x,y,w,h){ctx.drawImage(im,x,y,w,h)}
+function frameOf(name,i,cx,by,sc,alpha){const [fw,fh]=SEQ[name];ctx.save();if(alpha!=null)ctx.globalAlpha=alpha;
+ ctx.drawImage(IM[name],i*fw,0,fw,fh,cx-fw*sc/2,by-fh*sc,fw*sc,fh*sc);ctx.restore()}
+function drawPatch(p){const pf=1+0.07*Math.sin(p.puff*Math.PI)*(p.puff>0?1:0);const w=CW*p.s*pf,h=CH*p.s*pf;
+ ctx.save();ctx.translate(p.x,p.y);
+ if(p.st==='drag'||p.st==='fly'||p.st==='back'){ctx.save();ctx.translate(10,16);ctx.rotate(p.r);ctx.fillStyle='rgba(40,20,10,.28)';ctx.filter='blur(6px)';ctx.fillRect(-w/2,-h/2,w,h);ctx.restore()}
+ else if(p.st==='home'){ctx.save();ctx.translate(3,5);ctx.rotate(p.r);ctx.fillStyle='rgba(40,20,10,.22)';ctx.fillRect(-w/2,-h/2,w,h);ctx.restore()}
+ ctx.rotate(p.r);
+ ctx.drawImage(p.img,-w/2,-h/2,w,h);
+ ctx.restore()}
+function draw(){
+ const k=cv.width/W;ctx.setTransform(k,0,0,k,0,0);
+ ctx.drawImage(IM.bed,0,0,W,H);
+ // 空格虚线
+ ctx.save();ctx.setLineDash([10,8]);ctx.lineWidth=2.5;
+ for(let i=0;i<12;i++){if(cells[i]&&cells[i].st==='placed')continue;const c=cellRect(i);ctx.strokeStyle='rgba(176,120,80,'+(0.35+0.15*Math.sin(T*3+i))+')';ctx.strokeRect(c.x+8,c.y+8,c.w-16,c.h-16)}
+ ctx.restore();
+ // 睡觉的狐兔（在被子下面）
+ if(state.phase==='sleep'){const t=T-state.t0;const rise=Math.min(1,t/.5);let fi=t<3.2?Math.min(3,Math.floor(t/.8)):4+Math.floor((t-3.2)*2.2)%4;
+  if(state.poke&&T-state.poke<1.2)fi=0;
+  const br=1+0.012*Math.sin(T*2.2);
+  ctx.save();ctx.translate(BEDX,BEDY+(1-easeOutBack(rise))*120);ctx.scale(1,br);frameOf('sleep',fi,0,0,SS);ctx.restore()}
+ // 被子（已放上的布块） + 整体翻落弹一下
+ ctx.save();
+ if(state.flop){const u=(T-state.flop);const s=1+0.035*Math.exp(-u*4)*Math.sin(u*18);ctx.translate(0,Q.y+Q.h);ctx.scale(1,s);ctx.translate(0,-(Q.y+Q.h))}
+ for(const p of patches)if(p.st==='placed')drawPatch(p);
+ // 缝线
+ for(const s of stitchers){const u=s.done?1:clamp((T-s.t0)/s.d,0,1);drawStitch(s,u)}
+ for(const b of buttons){const u=clamp((T-b.t0)/.35,0,1),sc=easeOutBack(u)*30;ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.r);ctx.drawImage(b.img,-sc/2,-sc/2,sc,sc);ctx.restore()}
+ if(state.phase==='sleep'){ // 被子上沿的阴影，让头像“钻进去”
+  const g=ctx.createLinearGradient(0,Q.y,0,Q.y+26);g.addColorStop(0,'rgba(70,40,20,.28)');g.addColorStop(1,'rgba(70,40,20,0)');ctx.fillStyle=g;ctx.fillRect(Q.x,Q.y,Q.w,26)}
+ ctx.restore();
+ // 针
+ for(const s of stitchers){if(s.done)continue;const u=clamp((T-s.t0)/s.d,0,1);const q=ptAt(s.pts,(u+s.start/4)%1);
+  const ph=(u*28)%1,up=Math.sin(ph*Math.PI);ctx.save();ctx.translate(q[0]+8,q[1]-10-up*26);ctx.rotate(-.55+up*.25);ctx.globalAlpha=.6+.4*up;
+  ctx.drawImage(IM.needle,-18,-124,90,124);ctx.restore()}
+ // 地上的布块
+ for(const p of patches)if(p.st==='home'||p.st==='wait')drawPatch(p);
+ // 狐兔
+ drawKit();
+ for(const p of patches)if(p.st==='fly'||p.st==='back'||p.st==='drag')drawPatch(p);
+ // 粒子
+ for(const q of parts){const a=1-(T-q.t0)/q.life;ctx.save();ctx.globalAlpha=Math.max(0,a);ctx.translate(q.x,q.y);ctx.rotate(q.r);
+  if(q.kind==='fluff'){ctx.fillStyle='#fff6e6';ctx.beginPath();ctx.arc(0,0,4*q.s,0,7);ctx.fill()}
+  else if(q.kind==='heart'){ctx.fillStyle='#ff7c9a';ctx.font='bold 34px sans-serif';ctx.fillText('♥',-12,12)}
+  else if(q.kind==='btn'){const im=IM['b'+(Math.floor(q.s*10)%4)];ctx.drawImage(im,-16,-16,32,32)}
+  else{const im=IM['s'+(Math.floor(q.s*10)%3)];ctx.drawImage(im,-15*q.s-6,-15*q.s-6,30*q.s+12,30*q.s+12)}
+  ctx.restore()}
+ drawNight();
+}
+function drawStitch(s,u){const pts=s.pts;ctx.save();ctx.lineCap='round';
+ const L=2*(pts[1][0]-pts[0][0])+2*(pts[2][1]-pts[1][1]);const n=Math.floor(L/18);
+ for(let i=0;i<n;i++){const a=i/n,b=(i+.55)/n;const rel=(a-s.start/4+1)%1; if(rel>u)continue;
+  const p0=ptAt(pts,a),p1=ptAt(pts,b);const fresh=clamp(1-(u-rel)*6,0,1);
+  ctx.strokeStyle='rgba(60,20,10,.35)';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(p0[0]+1,p0[1]+2);ctx.lineTo(p1[0]+1,p1[1]+2);ctx.stroke();
+  ctx.strokeStyle=fresh>0?'#ff5a4a':'#d8352f';ctx.lineWidth=4.6+fresh*2;ctx.beginPath();ctx.moveTo(p0[0],p0[1]);ctx.lineTo(p1[0],p1[1]);ctx.stroke()}
+ // 拖着的线
+ if(u<1){const q=ptAt(pts,(u+s.start/4)%1);const ph=(u*28)%1,up=Math.sin(ph*Math.PI);
+  ctx.strokeStyle='#e0403a';ctx.lineWidth=3.2;ctx.beginPath();ctx.moveTo(q[0],q[1]);
+  ctx.quadraticCurveTo(q[0]-40,q[1]-60-up*40,q[0]+40-up*24,q[1]-up*30-100);ctx.stroke()}
+ ctx.restore()}
+function drawKit(){const ph=state.phase;
+ if(ph==='play'||ph==='wait'){const sewing=stitchers.some(s=>!s.done);let fi=0;
+  if(sewing)fi=Math.floor(T*9)%6;else if(T-kit.react<.7)fi=7;else fi=(Math.sin(T*.7)>.97)?1:0;
+  const b=1+0.02*Math.sin(T*2.4)+kit.bounce*0.08;ctx.save();ctx.translate(KX,KY);ctx.scale(2-b,b);frameOf('sew',fi,0,0,KS);ctx.restore()}
+ else if(ph==='cheer'){const t=T-state.t0;const jump=Math.abs(Math.sin(t*7))*30;frameOf('sew',6,KX,KY-jump,KS)}
+ else if(ph==='hop'){const t=T-state.t0,u=clamp(t/1.5,0,1);const fi=Math.min(7,Math.floor(u*8));
+  const a=clamp((u-.15)/.85,0,1);const x=lerp(KX,BEDX,a),y=lerp(KY,Q.y+90,a)-Math.sin(a*Math.PI)*260;
+  ctx.save();ctx.translate(x,y);ctx.scale(1,1);frameOf('hop',fi,0,40,KS*0.9,u>.88?1-(u-.88)/.12:1);ctx.restore()}
+}
+function drawNight(){const n=state.night;if(n<=0)return;
+ ctx.save();ctx.fillStyle='rgba(16,18,52,'+(0.64*n)+')';ctx.fillRect(0,0,W,H);
+ ctx.globalCompositeOperation='lighter';
+ let g=ctx.createRadialGradient(1125,150,10,1125,150,260);g.addColorStop(0,'rgba(255,190,90,'+(.38*n)+')');g.addColorStop(1,'rgba(255,190,90,0)');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ g=ctx.createRadialGradient(170,230,10,170,230,240);g.addColorStop(0,'rgba(120,150,255,'+(.25*n)+')');g.addColorStop(1,'rgba(120,150,255,0)');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ g=ctx.createRadialGradient(BEDX,330,20,BEDX,330,330);g.addColorStop(0,'rgba(255,200,150,'+(.09*n)+')');g.addColorStop(1,'rgba(255,200,150,0)');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ ctx.globalCompositeOperation='source-over';
+ // 月亮、星星
+ const t=T-state.t0;ctx.globalAlpha=n;
+ ctx.drawImage(IM.moon,1170,40+Math.sin(T*.8)*6,90,92);
+ const SP=[[1060,330,0],[1240,250,1],[80,90,2],[300,60,0],[880,70,1],[470,90,2],[1280,520,0]];
+ SP.forEach(([x,y,i],j)=>{const tw=.5+.5*Math.sin(T*2.4+j*1.7);const s=26+tw*14;ctx.globalAlpha=n*(.45+.55*tw);ctx.drawImage(IM['s'+i],x-s/2,y-s/2,s,s)});
+ // Zzz
+ ctx.globalAlpha=1;ctx.font='bold 40px "Comic Sans MS",sans-serif';ctx.textAlign='center';
+ for(let i=0;i<3;i++){const u=((T*.35+i/3)%1);if(t<3)break;ctx.globalAlpha=n*Math.sin(u*Math.PI);ctx.fillStyle='#fff3c8';
+  ctx.save();ctx.translate(BEDX+150+u*120+Math.sin(u*9)*12,170-u*150);ctx.rotate(-.2);ctx.font='bold '+(22+u*26)+'px "Comic Sans MS",sans-serif';ctx.fillText('Z',0,0);ctx.restore()}
+ ctx.globalAlpha=n;ctx.font='bold 34px "PingFang SC","Noto Sans SC",sans-serif';ctx.fillStyle='#fff3c8';ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=8;
+ ctx.fillText('晚安，小狐兔',W/2,H-60);
+ ctx.restore()}
+function start(){reset();window.__ready=true;requestAnimationFrame(frame)}
+window.__api={state:()=>state.phase,auto:()=>document.getElementById('auto').onclick(),patchPos:()=>patches.filter(p=>p.st==='home').map(p=>[p.x,p.y]),cell:i=>{const c=cellRect(i);return [c.cx,c.cy]},empty:(x,y)=>nearestEmpty(x,y)};
+</script></body></html>

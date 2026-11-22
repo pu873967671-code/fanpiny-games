@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>狐兔彩铅涂色 · 花园野餐</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#d9c4a3;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+body{background:radial-gradient(ellipse at 50% 35%,#ead8b8 0%,#d4bb94 60%,#bfa47c 100%)}
+#page{position:absolute;box-shadow:0 2px 0 #fff8 inset,0 10px 30px #5a3d2066,0 2px 6px #5a3d2044;border-radius:4px;cursor:none}
+#fx{position:absolute;left:0;top:0;pointer-events:none}
+#ui{position:absolute;left:0;right:0;top:8px;display:flex;justify-content:center;gap:8px;pointer-events:none;flex-wrap:wrap}
+.chip{pointer-events:auto;border:none;border-radius:999px;padding:7px 14px;font-size:14px;background:#fffaf0e8;color:#6b4a30;box-shadow:0 2px 6px #6b4a3033;cursor:pointer;font-family:inherit}
+.chip.on{background:#6b4a30;color:#fff8ec}
+#prog{pointer-events:none;background:#fffaf0e8;border-radius:999px;padding:7px 14px;font-size:14px;color:#6b4a30;box-shadow:0 2px 6px #6b4a3033;display:flex;align-items:center;gap:8px}
+#bar{width:90px;height:8px;border-radius:9px;background:#e9dcc6;overflow:hidden}#bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#f6a07a,#f3c95c,#9cc75a)}
+#tray{position:absolute;left:50%;transform:translateX(-50%);display:flex;gap:6px;align-items:flex-end;padding:0 14px;background:linear-gradient(#a8784e,#8a5f3b);border-radius:12px 12px 6px 6px;box-shadow:0 6px 14px #4a2f1a55, inset 0 2px 0 #c99a6c}
+#tray img{display:block;cursor:pointer;transition:transform .18s cubic-bezier(.3,1.6,.5,1)}
+#tray img.sel{transform:translateY(-22%)}
+#hint{position:absolute;left:0;right:0;text-align:center;color:#6b4a30;font-size:13px;opacity:.85;pointer-events:none}
+</style></head><body>
+<canvas id="page" width="1536" height="1024"></canvas>
+<div id="ui">
+  <button class="chip on" id="mMagic">✨ 魔法彩铅：显露原画</button>
+  <button class="chip" id="mFree">🖍 自由上色：用所选颜色</button>
+  <button class="chip" id="sz">笔头：中</button>
+  <button class="chip" id="clr">换张新纸</button>
+  <div id="prog">已涂 <span id="pct">0%</span><div id="bar"><i></i></div></div>
+</div>
+<div id="tray"></div>
+<div id="hint">按住拖动来涂色 · 点下面的彩铅换颜色（会削出铅笔屑）</div>
+<canvas id="fx"></canvas>
+<script>
+const A={color:'color.webp',line:'line.webp',wave:'wave.webp',
+ pen0:'pen0.webp',pen1:'pen1.webp',pen2:'pen2.webp',pen3:'pen3.webp',pen4:'pen4.webp',pen5:'pen5.webp',pen6:'pen6.webp',pen7:'pen7.webp',
+ sh0:'sh0.webp',sh1:'sh1.webp',sh2:'sh2.webp',sh3:'sh3.webp',sh4:'sh4.webp',sh5:'sh5.webp',sh6:'sh6.webp',sh7:'sh7.webp',sh8:'sh8.webp',sh9:'sh9.webp',sh10:'sh10.webp',sh11:'sh11.webp',
+ sh12:'sh12.webp',sh13:'sh13.webp',sh14:'sh14.webp',sh15:'sh15.webp',sh16:'sh16.webp',sh17:'sh17.webp',sh18:'sh18.webp',sh19:'sh19.webp',sh20:'sh20.webp',sh21:'sh21.webp',sh22:'sh22.webp',sh23:'sh23.webp'};
+const PCOL=['#e8433f','#ec6a1f','#f2c218','#86b52e','#3fb2ee','#2f5cc6','#9a5cc2','#9c4f2e'];
+const SHAV=[0,1,2,3,4,11,5,6]; // 削屑颜色 ↔ 彩铅
+const W=1536,H=1024;
+const IMG={};let loaded=0;const NA=Object.keys(A).length;
+for(const k in A){const im=new Image();im.onload=()=>{if(++loaded===NA)init()};im.onerror=()=>{console.error('load fail',k);if(++loaded===NA)init()};im.src=A[k];IMG[k]=im}
+const page=document.getElementById('page'),pc=page.getContext('2d');
+const fx=document.getElementById('fx'),fc=fx.getContext('2d');
+const layer=Object.assign(document.createElement('canvas'),{width:W,height:H}),lc=layer.getContext('2d');
+const paper=Object.assign(document.createElement('canvas'),{width:W,height:H}),ppc=paper.getContext('2d');
+let rng=1234567;const rnd=()=>{rng=(rng*1103515245+12345)>>>0;return rng/4294967296};
+// ---------- 纸纹 / 排线纹理（世界坐标，可平铺） ----------
+function hash(x,y){let h=x*374761393+y*668265263;h=(h^(h>>>13))*1274126177;return ((h^(h>>>16))>>>0)/4294967296}
+function vnoise(x,y,p){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+ const a=hash(xi%p,yi%p),b=hash((xi+1)%p,yi%p),c=hash(xi%p,(yi+1)%p),d=hash((xi+1)%p,(yi+1)%p);return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v}
+function mkTex(fn){const c=Object.assign(document.createElement('canvas'),{width:256,height:256}),x=c.getContext('2d'),d=x.createImageData(256,256);
+ for(let j=0;j<256;j++)for(let i=0;i<256;i++){const [r,g,b,a]=fn(i,j),o=(j*256+i)*4;d.data[o]=r;d.data[o+1]=g;d.data[o+2]=b;d.data[o+3]=a}x.putImageData(d,0,0);return c}
+// 纸张颗粒：低频+高频噪声，用来“掏掉”笔触里的纸纹凹处
+const grainVal=(i,j)=>0.55*vnoise(i/3,j/3,256/3|0)+0.3*vnoise(i/1.3,j/1.3,197)+0.15*vnoise(i/9,j/9,256/9|0);
+const GRAIN=mkTex((i,j)=>{const g=grainVal(i,j);return [0,0,0,Math.max(0,Math.min(255,(g-0.42)*700))]});
+const PAPERN=mkTex((i,j)=>{const g=grainVal(i,j);const v=(g-0.5)*40;return v>0?[255,255,255,v*2]:[90,60,30,-v*1.4]});
+// 排线：三个方向，线宽带随机浓淡，周期整除 256 保证平铺
+function hatch(dir,P){return mkTex((i,j)=>{const s=dir===0?(i+j):dir===1?(i-j+512):(i+2*j);const along=dir===0?(i-j+512):dir===1?(i+j):(2*i-j+512);
+ const d=s%P, prof=Math.max(0,1-Math.abs(d-P*0.35)/(P*0.32));const n=0.45+0.55*vnoise(along/7,Math.floor(s/P),256);
+ return [0,0,0,Math.min(255,prof*n*300+20)]})}
+const HATCH=[hatch(0,8),hatch(1,8),hatch(2,8)];
+let pats=null;
+// 软边笔头（每种尺寸一张）
+const SIZES=[{n:'细',r:14},{n:'中',r:26},{n:'粗',r:44},{n:'超粗',r:66}];let sizeI=1;
+const tips={};
+function tip(r){if(tips[r])return tips[r];const s=Math.ceil(r*2+4),c=Object.assign(document.createElement('canvas'),{width:s,height:s}),x=c.getContext('2d'),d=x.createImageData(s,s);
+ for(let j=0;j<s;j++)for(let i=0;i<s;i++){const dx=i-s/2,dy=j-s/2,q=Math.sqrt(dx*dx+dy*dy)/r;const e=1-q+0.25*(hash(i*3,j*7)-0.5);d.data[(j*s+i)*4+3]=Math.max(0,Math.min(1,e*2.2))*255}
+ x.putImageData(d,0,0);return tips[r]=c}
+const stamp=document.createElement('canvas'),sc=stamp.getContext('2d');
+// ---------- 状态 ----------
+let mode='magic',penI=4,hatchI=0,cov=0,celebrated=false,cel=null;
+let view={x:0,y:0,s:1};
+const P={x:-999,y:-999,down:false,lx:0,ly:0,vx:0,vy:0,ax:0,ay:0,px:-999,py:-999,inPage:false,seen:false};
+const pen={a:-0.55,va:0,lift:1};
+const parts=[];
+function resize(){const vw=innerWidth,vh=innerHeight;fx.width=vw*devicePixelRatio;fx.height=vh*devicePixelRatio;fx.style.width=vw+'px';fx.style.height=vh+'px';
+ const trayH=Math.min(110,vh*0.16),top=46,avail=vh-top-trayH-24;const s=Math.min((vw-24)/W,avail/H);
+ view.s=s;view.x=(vw-W*s)/2;view.y=top+(avail-H*s)/2;page.style.width=W*s+'px';page.style.height=H*s+'px';page.style.left=view.x+'px';page.style.top=view.y+'px';
+ const tr=document.getElementById('tray');tr.style.bottom='0px';tr.style.height=trayH+'px';tr.querySelectorAll('img').forEach(im=>{im.style.height=trayH*1.05+'px'});
+ document.getElementById('hint').style.top=(view.y+H*s+4)+'px';document.getElementById('hint').style.display=vh-(view.y+H*s)>trayH+30?'block':'none'}
+function init(){
+ pats=HATCH.map(h=>pc.createPattern(h,'repeat'));
+ // 纸：奶油色 + 纸纹
+ ppc.fillStyle='#fbf6ea';ppc.fillRect(0,0,W,H);ppc.fillStyle=ppc.createPattern(PAPERN,'repeat');ppc.fillRect(0,0,W,H);
+ const g=ppc.createRadialGradient(W/2,H/2,H*0.4,W/2,H/2,H*0.95);g.addColorStop(0,'#0000');g.addColorStop(1,'#8a603018');ppc.fillStyle=g;ppc.fillRect(0,0,W,H);
+ const tr=document.getElementById('tray');
+ for(let i=0;i<8;i++){const im=IMG['pen'+i].cloneNode();if(i===penI)im.classList.add('sel');im.onpointerdown=e=>{e.stopPropagation();pick(i)};tr.appendChild(im)}
+ resize();addEventListener('resize',resize);render();requestAnimationFrame(loop);window.__ready=true}
+function pick(i){penI=i;document.querySelectorAll('#tray img').forEach((im,k)=>im.classList.toggle('sel',k===i));
+ if(mode==='magic')setMode('free');
+ // 削铅笔：笔尖处喷出一圈削屑 + 铅粉
+ const tx=P.seen?P.x:innerWidth/2,ty=P.seen?P.y:innerHeight/2;pen.va+=9;
+ for(let k=0;k<5;k++)spawn(tx,ty,'sh'+SHAV[i],true);for(let k=0;k<10;k++)spawn(tx,ty,'sh'+(12+(rnd()*12|0)),false,PCOL[i])}
+function setMode(m){mode=m;document.getElementById('mMagic').classList.toggle('on',m==='magic');document.getElementById('mFree').classList.toggle('on',m==='free')}
+document.getElementById('mMagic').onclick=()=>setMode('magic');document.getElementById('mFree').onclick=()=>setMode('free');
+document.getElementById('sz').onclick=()=>{sizeI=(sizeI+1)%SIZES.length;document.getElementById('sz').textContent='笔头：'+SIZES[sizeI].n};
+document.getElementById('clr').onclick=()=>{lc.clearRect(0,0,W,H);celebrated=false;cov=0;render();updCov(true)};
+// ---------- 输入 ----------
+function toPage(x,y){return [(x-view.x)/view.s,(y-view.y)/view.s]}
+addEventListener('pointermove',e=>{P.x=e.clientX;P.y=e.clientY;P.seen=true;if(P.down){for(const ev of (e.getCoalescedEvents?e.getCoalescedEvents():[e]))strokeTo(ev.clientX,ev.clientY)}});
+page.addEventListener('pointerdown',e=>{P.down=true;P.x=e.clientX;P.y=e.clientY;P.seen=true;const [x,y]=toPage(e.clientX,e.clientY);P.lx=x;P.ly=y;P.acc=0;hatchI=(hatchI+1+(rnd()*2|0))%3;dab(x,y,1);try{page.setPointerCapture(e.pointerId)}catch(_){}});
+addEventListener('pointerup',()=>{P.down=false;updCov()});addEventListener('pointercancel',()=>{P.down=false});
+fx.style.pointerEvents='none';
+function strokeTo(cx,cy){const [x,y]=toPage(cx,cy);const r=SIZES[sizeI].r,sp=Math.max(2,r*0.3);let dx=x-P.lx,dy=y-P.ly,d=Math.hypot(dx,dy);
+ if(d<sp)return;const n=Math.floor(d/sp);for(let k=1;k<=n;k++){dab(P.lx+dx*k/n,P.ly+dy*k/n,1)}
+ // 削屑/铅粉：画得越快掉得越多
+ P.acc+=d;while(P.acc>140){P.acc-=140;const bx=view.x+x*view.s,by=view.y+y*view.s;if(rnd()<0.22)spawn(bx,by,'sh'+SHAV[penI],true);else spawn(bx,by,'sh'+(12+(rnd()*12|0)),false,mode==='free'?PCOL[penI]:null)}
+ P.lx=x;P.ly=y;dirty=true}
+let dirty=false;
+function dab(x,y,p){const r=SIZES[sizeI].r*(0.9+0.2*rnd()),t=tip(SIZES[sizeI].r),s=t.width;
+ if(stamp.width!==s){stamp.width=s;stamp.height=s}
+ const x0=Math.round(x-s/2),y0=Math.round(y-s/2);
+ sc.globalCompositeOperation='copy';sc.save();sc.translate(-x0,-y0);sc.fillStyle=pats[hatchI];sc.fillRect(x0,y0,s,s);sc.restore();          // 1 世界坐标排线
+ sc.globalCompositeOperation='source-over';sc.globalAlpha=0.35;sc.save();sc.translate(-x0,-y0);sc.fillStyle=pats[(hatchI+1)%3];sc.fillRect(x0,y0,s,s);sc.restore();sc.globalAlpha=1; // 少量交叉线
+ sc.globalCompositeOperation='destination-in';sc.drawImage(t,0,0);                                                                          // 2 软边笔头
+ sc.globalCompositeOperation='destination-out';sc.globalAlpha=0.7;sc.save();sc.translate(-x0,-y0);sc.fillStyle=GRAINP||(GRAINP=sc.createPattern(GRAIN,'repeat'));sc.fillRect(x0,y0,s,s);sc.restore();sc.globalAlpha=1; // 3 纸纹凹处留白
+ sc.globalCompositeOperation='source-in';
+ if(mode==='magic')sc.drawImage(IMG.color,-x0,-y0);else{sc.fillStyle=PCOL[penI];sc.fillRect(0,0,s,s)}                                     // 4 上色：完稿或所选颜色
+ lc.globalAlpha=mode==='magic'?0.55:0.42;lc.drawImage(stamp,x0,y0);lc.globalAlpha=1;dirty=true}
+let GRAINP=null;
+function render(){pc.globalCompositeOperation='source-over';pc.drawImage(paper,0,0);pc.drawImage(layer,0,0);pc.globalCompositeOperation='multiply';pc.drawImage(IMG.line,0,0);pc.globalCompositeOperation='source-over'}
+// 涂色比例
+const covC=Object.assign(document.createElement('canvas'),{width:96,height:64}),cc=covC.getContext('2d',{willReadFrequently:true});
+let lastCov=0;
+function updCov(force){cc.clearRect(0,0,96,64);cc.drawImage(layer,0,0,96,64);const d=cc.getImageData(0,0,96,64).data;let n=0;for(let i=3;i<d.length;i+=4)if(d[i]>45)n++;
+ cov=n/(96*64);document.getElementById('pct').textContent=Math.round(cov*100)+'%';document.querySelector('#bar i').style.width=Math.min(100,cov/0.3*100)+'%';
+ if(!celebrated&&cov>=0.3){celebrated=true;celebrate()}}
+window.__cov=()=>cov;
+// ---------- 庆祝：狐兔序列帧 ----------
+const SEQ=[0,0,1,0,0,3,4,5,6,5,4,5,6,5,7,7,7,0,1,0];
+function celebrate(){cel={t:0};const cx=view.x+W*view.s*0.9,cy=view.y+H*view.s*0.8;for(let k=0;k<14;k++)spawn(cx,cy,'sh'+(k%12),true,null,true)}
+function spawn(x,y,key,big,tint,burst){const im=IMG[key];if(!im)return;const a=burst?-Math.PI/2+(rnd()-0.5)*2.2:(rnd()-0.5)*1.6+(big?-1.2:-0.4);const sp=burst?380+rnd()*320:(big?120:60)+rnd()*140;
+ parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-(big?120:40),r:rnd()*6,vr:(rnd()-0.5)*(big?14:20),im,sc:(big?0.42+rnd()*0.25:0.22+rnd()*0.18)*Math.max(0.6,view.s*1.3),life:0,max:big?1.6:1.0,tint})}
+let last=0;
+function loop(ts){const dt=Math.min(0.05,last?(ts-last)/1000:0.016);last=ts;step(dt,ts);requestAnimationFrame(loop)}
+let covT=0;
+function step(dt,ts){
+ if(dirty){render();dirty=false;covT+=dt;if(covT>0.3){covT=0;updCov()}}
+ // 指针速度/加速度 → 铅笔刚体摆动（笔尖固定在指针上，笔身是有惯性的摆）
+ const vx=(P.x-P.px)/dt,vy=(P.y-P.py)/dt;if(P.px>-998){P.ax=(vx-P.vx)/dt;P.ay=(vy-P.vy)/dt;P.vx=vx;P.vy=vy}P.px=P.x;P.py=P.y;
+ const a0=-0.55+Math.max(-0.25,Math.min(0.25,P.vx*0.00025)),ph=pen.a;
+ let tq=(Math.sin(ph)*P.ay+Math.cos(ph)*P.ax)*0.0009;tq=Math.max(-60,Math.min(60,tq));
+ const wob=P.down?Math.sin(ts*0.047)*Math.min(1,Math.hypot(P.vx,P.vy)/600)*14:0; // 涂色时笔头轻微抖
+ pen.va+=(-(pen.a-a0)*120-pen.va*9+tq+wob)*dt;pen.a+=pen.va*dt;
+ pen.lift+=((P.down?0:1)-pen.lift)*Math.min(1,dt*14);
+ for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.life+=dt;p.vy+=900*dt;p.vx*=1-dt*1.2;p.x+=p.vx*dt;p.y+=p.vy*dt;p.r+=p.vr*dt;if(p.life>p.max)parts.splice(i,1)}
+ if(cel){cel.t+=dt;if(cel.t>4.6)cel=null}
+ draw(ts)}
+function draw(ts){const dpr=devicePixelRatio;fc.setTransform(dpr,0,0,dpr,0,0);fc.clearRect(0,0,innerWidth,innerHeight);
+ // 庆祝角色
+ if(cel){const t=cel.t,fw=384,fh=512,fi=SEQ[Math.min(SEQ.length-1,Math.floor(t*6))];
+  const inP=Math.min(1,t/0.45),outP=Math.max(0,(t-4.1)/0.5),e=1-Math.pow(1-inP,3);const bounce=Math.sin(Math.min(1,t/0.6)*Math.PI)*0.12*(1-Math.min(1,t/0.6));
+  const hgt=H*view.s*0.46,sc=hgt/fh,cx=view.x+W*view.s*0.9,base=view.y+H*view.s+hgt*0.1;
+  const y=base-hgt*(e-outP*1.2)+(1-e)*30;fc.save();fc.translate(cx,y+hgt);fc.scale(1+bounce,1-bounce);fc.rotate(Math.sin(t*5)*0.03);
+  fc.drawImage(IMG.wave,fi*fw,0,fw,fh,-fw*sc/2,-hgt,fw*sc,hgt);fc.restore();
+  if(t>0.5&&t<4.0){const bx=cx-hgt*0.55,by=y+hgt*0.12,al=Math.min(1,(t-0.5)*4,(4-t)*4);fc.globalAlpha=al;fc.fillStyle='#fffaf0';fc.strokeStyle='#6b4a30';fc.lineWidth=2.5;
+   const bw=Math.max(110,hgt*0.55),bh=bw*0.36;fc.beginPath();fc.roundRect(bx-bw/2,by-bh/2,bw,bh,bh/2);fc.moveTo(bx+bw*0.28,by+bh/2-1);fc.lineTo(bx+bw*0.42,by+bh*0.95);fc.lineTo(bx+bw*0.12,by+bh/2-1);fc.fill();fc.stroke();
+   fc.fillStyle='#6b4a30';fc.font=`bold ${Math.round(bh*0.45)}px "PingFang SC","Microsoft YaHei",sans-serif`;fc.textAlign='center';fc.textBaseline='middle';fc.fillText('涂得真好！',bx,by+1);fc.globalAlpha=1}}
+ // 削屑粒子
+ for(const p of parts){const k=1-Math.max(0,(p.life-p.max*0.6)/(p.max*0.4));fc.globalAlpha=k;fc.save();fc.translate(p.x,p.y);fc.rotate(p.r);const w=p.im.width*p.sc,h=p.im.height*p.sc;fc.drawImage(p.im,-w/2,-h/2,w,h);fc.restore()}
+ fc.globalAlpha=1;
+ // 彩铅光标（笔尖在指针处）
+ if(P.seen){const im=IMG['pen'+penI],ps=Math.max(0.45,Math.min(1,view.s*1.25)),w=im.width*ps,h=im.height*ps,lift=pen.lift;
+  fc.save();fc.translate(P.x+6+lift*10,P.y+8+lift*14);fc.rotate(pen.a);fc.globalAlpha=0.18;fc.filter='blur(3px)';fc.fillStyle='#3a2410';fc.fillRect(-w*0.3,6,w*0.6,h*0.95);fc.restore();fc.filter='none';fc.globalAlpha=1;
+  fc.save();fc.translate(P.x,P.y-lift*3);fc.rotate(pen.a);fc.drawImage(im,-w/2,-3*ps,w,h);fc.restore()}
+}
+// 录屏用
+window.__api={pick,setMode,setSize:i=>{sizeI=i;document.getElementById('sz').textContent='笔头：'+SIZES[i].n},cov:()=>cov};
+</script></body></html>

@@ -1,0 +1,406 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>狐兔像素海崖小村 v2</title>
+<style>html,body{margin:0;height:100%;background:#120f22;display:flex;align-items:center;justify-content:center;overflow:hidden}
+canvas{width:min(100vw,177.7vh);image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;cursor:pointer}</style>
+<canvas id=c width=320 height=180></canvas>
+<script src="kit_sprites.js"></script>
+<script>
+// 纯代码像素：320x180 索引色缓冲 + 32 色固定调色板（按时段整板替换），无抖动、无半透明
+const W=320,H=180,WW=560;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');ctx.imageSmoothingEnabled=false;
+const img=ctx.createImageData(W,H),u32=new Uint32Array(img.data.buffer),buf=new Uint8Array(W*H);
+const SL='tr sk0 sk1 sk2 sk3 cl cls mt1 mt2 seaD sea seaL foam ink clD clM grD gr grL stone woD woM roR roD roB wall wallS fC fS peach pink lit glow1'.split(' ');
+const C={};SL.forEach((n,i)=>C[n]=i);
+const PALS={
+ day:'#4f8fd8 #69a9e8 #8fc6f0 #c0e6f6 #ffffff #c6dcf0 #8eaed2 #6890b4 #2a6aa4 #3d8cc6 #8ad0ec #ffffff #2a1d2e #6e5a52 #a08672 #4f8a3a #85b83f #b8dc6a #ddd2c0 #6b3f2e #a8683a #d6574a #8f3a40 #4a80a8 #f3e6d0 #d4bfa4 #fff1da #f1cfa6 #f8a874 #f59aa0 #ffe27a #f7b04a',
+ dusk:'#3b2a6b #7e4691 #e2767e #fbc489 #ffd9b8 #c47a9c #9a5f8e #6a4276 #3e3272 #6a4486 #f6aa7c #fff0e4 #24162e #4b3a5a #7d5a6c #46653e #6f9a52 #9fba62 #c4a6a4 #5a3430 #95583a #c8524a #7e3242 #4a5a8c #e8cdb8 #bf9a8e #fbe6d4 #e6bfa0 #f09a6a #ee8f9a #ffe08a #f0a050',
+ night:'#0b0a22 #141540 #1f285c #2f4078 #8a94c6 #474c82 #2b3060 #1d2248 #0e1636 #17244c #6a82c2 #e4ecff #0a0818 #1c1a30 #35334f #1d3838 #2e5848 #46785a #66648a #3e2c3c #64485a #7c3a54 #4e2a44 #2e3c6a #857b9e #645c80 #ece6f4 #c8bad8 #d08c78 #c8808e #ffe27a #eea24c',
+ dawn:'#5a7cc2 #98b2dc #eec4c8 #fde6b2 #fff6ee #d8b8cc #a09cc4 #7a80aa #4878ac #66a2c8 #ffe2d2 #ffffff #2a2038 #5c5a72 #8c8692 #4c7a4a #7fb55c #aacc72 #e0d2ca #643c34 #a0643c #e0665a #9a4450 #5a80b0 #f6e8dc #d8c0b0 #fff2e2 #f0caa8 #f8a874 #f59aa0 #ffe9a0 #f2b060'};
+const PHN={dawn:'黎明',day:'白天',dusk:'黄昏',night:'夜'};
+function parsePal(s){return [[0,0,0]].concat(s.split(' ').map(h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]))}
+for(const k in PALS)PALS[k]=parsePal(PALS[k]);
+let palCur=PALS.dusk.map(c=>c.slice()),palFrom=null,palTo=PALS.dusk,palK=4,palT=0;
+const pal32=new Uint32Array(33);
+function bakePal(){for(let i=0;i<33;i++){const c=palCur[i];pal32[i]=(255<<24)|(c[2]<<16)|(c[1]<<8)|c[0]}}
+bakePal();
+// ---------- 基础绘制（世界坐标，OX 为当前层的相机偏移） ----------
+let OX=0,OY=0;
+function px(x,y,c){x=Math.round(x-OX);y=Math.round(y-OY);if(x<0||y<0||x>=W||y>=H||!c)return;buf[y*W+x]=c}
+function rect(x,y,w,h,c){x=Math.round(x-OX);y=Math.round(y-OY);const x0=Math.max(0,x),x1=Math.min(W,x+w),y0=Math.max(0,y),y1=Math.min(H,y+h);if(x1<=x0)return;for(let yy=y0;yy<y1;yy++)buf.fill(c,yy*W+x0,yy*W+x1)}
+function disc(cx,cy,r,c){for(let y=-r;y<=r;y++){const w=Math.floor(Math.sqrt(r*r-y*y+r*.8));rect(cx-w,cy+y,w*2+1,1,c)}}
+function line(x0,y0,x1,y1,c){x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);const dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1;let e=dx+dy;for(let i=0;i<400;i++){px(x0,y0,c);if(x0===x1&&y0===y1)break;const e2=2*e;if(e2>=dy){e+=dy;x0+=sx}if(e2<=dx){e+=dx;y0+=sy}}}
+const hsh=(x,y)=>(((x*73856093)^(y*19349663)^(x*y*83492791))&0x7fffffff);
+// 字符精灵
+const LG={'.':0,k:C.ink,w:C.foam,r:C.roR,R:C.roD,y:C.lit,h:C.glow1,o:C.peach,p:C.pink,g:C.gr,G:C.grD,l:C.grL,b:C.woM,B:C.woD,s:C.stone,f:C.fC,F:C.fS,c:C.wall,S:C.wallS,m:C.clM,d:C.clD,q:C.seaL,u:C.roB,L:C.cl,x:C.cls,a:C.sea};
+function mkspr(rows,ol){let h=rows.length,w=Math.max(...rows.map(r=>r.length));let a=new Uint8Array(w*h);rows.forEach((r,y)=>{for(let x=0;x<r.length;x++)a[y*w+x]=LG[r[x]]||0});
+ if(ol){const W2=w+2,H2=h+2,b=new Uint8Array(W2*H2);for(let y=0;y<h;y++)for(let x=0;x<w;x++)b[(y+1)*W2+x+1]=a[y*w+x];const o=b.slice();for(let y=0;y<H2;y++)for(let x=0;x<W2;x++){if(b[y*W2+x])continue;for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<W2&&yy<H2&&b[yy*W2+xx]&&b[yy*W2+xx]!==C.ink){o[y*W2+x]=C.ink;break}}}return{w:W2,h:H2,a:o}}
+ return{w,h,a}}
+function blit(s,x,y,flip,shear){x=Math.round(x);y=Math.round(y);for(let j=0;j<s.h;j++){const sh=shear?shear(j):0;for(let i=0;i<s.w;i++){const v=s.a[j*s.w+(flip?s.w-1-i:i)];if(v)px(x+i+sh,y+j,v)}}}
+// ---------- 狐兔精灵：kit 的字母图 -> 调色板索引 ----------
+const FOXMAP={O:C.woD,C:C.fC,S:C.fS,P:C.peach,K:C.pink,E:C.ink,B:C.woM,W:C.foam,G:C.gr,g:C.grD,T:C.pink,N:C.roD,A:C.woM};
+const foxCache={};
+function foxSpr(o){const k=JSON.stringify(o);if(foxCache[k])return foxCache[k];const f=Fox.frame(o);const a=new Uint8Array(f.w*f.h);for(let i=0;i<a.length;i++)a[i]=f.a[i]?FOXMAP[f.a[i]]||0:0;return foxCache[k]={w:f.w,h:f.h,a}}
+// ---------- 世界布局 ----------
+const SEG=[[30,110,162],[110,117,156],[117,124,150],[124,270,144],[270,278,138],[278,420,132],[420,428,126],[428,548,120]];
+function gy(x){for(const s of SEG)if(x>=s[0]&&x<s[1])return s[2];return x<30?162:120}
+const isPier=x=>x>=30&&x<110;
+const HOUSES=[
+ {x:130,w:44,wh:32,roof:C.roR,timber:1,an:'bear',num:1,chim:.74,box:1},
+ {x:204,w:44,wh:30,roof:C.roB,awn:1,an:'mouse',num:2,chim:.24},
+ {x:284,w:48,wh:38,roof:C.roR,two:1,an:'owl',num:3,chim:.72,box:1},
+ {x:342,w:38,wh:30,roof:C.woM,an:'hedge',num:4,chim:.28},
+ {x:386,w:32,wh:28,roof:C.roB,an:'frog',num:5,chim:.7,cat:1},
+ {x:434,w:42,wh:34,roof:C.roR,timber:1,an:'duck',num:6,chim:.3,box:1}];
+HOUSES.forEach(h=>{h.base=gy(h.x+2)-7;h.door=0;h.dt=0;h.rh=Math.round(h.w*.44)});
+const LH={x:508,w:24,base:gy(510)-7,h:70};
+const ITEMS=[{k:'shell',x:76},{k:'letter',x:196},{k:'apple',x:264},{k:'star',x:337},{k:'mush',x:498}];
+ITEMS.forEach(it=>{it.y=gy(it.x)-2;it.got=0});
+const ICON={
+ shell:mkspr(['..ppp..','.pfpfp.','pfpfpfp','pfpfpfp','.ppppp.','..ooo..'],1),
+ letter:mkspr(['bffffffb','fbffffbf','ffbrrbff','fffrrfff','ffffffff'],1),
+ apple:mkspr(['...B...','..Bg...','.rrrrr.','rrfrrrr','rrrrrrr','rrrrrrR','.rrRrR.'],1),
+ star:mkspr(['...o...','..ooo..','ooooooo','.ooyoo.','..ooo..','.oo.oo.','oo...oo'],1),
+ mush:mkspr(['..rrr..','.rfrrr.','rrrrfrr','rRrrrRr','..fff..','..fff..','..fFf..'],1)};
+const ANIM={
+ bear:mkspr(['b.....b','bbbbbbb','bkbbbkb','bboooob','.bokoo.','.bbbbb.'],0),
+ mouse:mkspr(['ss...ss','spsssps','.sssss.','.sksks.','.sspss.','..sss..'],0),
+ owl:mkspr(['b.....b','bbbbbbb','yykbyyk','yyybyyy','bbbobbb','.bbbbb.'],0),
+ hedge:mkspr(['.B.B.B.','BBBBBBB','BoooooB','okoooko','oooBooo','.ooooo.'],0),
+ frog:mkspr(['gg...gg','wkg.gkw','ggggggg','gGGGGGg','glllllg','.lllll.'],0),
+ duck:mkspr(['..yyy..','.yyyyy.','.ykyky.','.yyooo.','.yyyyy.','..yyy..'],0)};
+const CHICK=[mkspr(['....r...','...rww..','...wkwo.','w..www..','wwwwww..','.wwwwx..','..o.o...'].map(s=>s.replace(/x/g,'L')),1),
+ mkspr(['........','........','w...r...','wwwwwr..','.wwwwkw.','..wwwwwo','..o.o...'],1),
+ mkspr(['....r...','...rww..','...wkwo.','w..www..','wwwwww..','.wwwww..','...oo...'],1)];
+const CAT=[mkspr(['o...o','oo.oo','ooooo','okoko','oopoo','.ooo.','obooo','oobbo','ooooo','oo.oo'],1),
+ mkspr(['o...o','oo.oo','ooooo','obobo','oopoo','.ooo.','obooo','oobbo','ooooo','oo.oo'],1)];
+const CATTAIL=[[[5,8],[6,8],[7,7],[7,6],[7,5]],[[5,8],[6,8],[7,8],[8,7],[8,6]],[[5,8],[6,7],[6,6],[7,5],[7,4]]];
+const PENG=[mkspr(['...yyy...','..yyyyy..','yyyyyyyy.','.kkkkkk..','.kwkkwkk.','okwwwwwk.','.kwwwwwkk','.kwwwwwk.','.kwwwwwk.','..kkkkk..','..o..o...'],0),
+ mkspr(['..yyy....','.yyyyy...','yyyyyyyy.','.kkkkkk..','.kwkkwkk.','okwwwwwk.','.kwwwwwkk','.kwwwwwkk','.kwwwwwk.','..kkkkk..','..o..o...'],0)];
+const GULL=[mkspr(['k.....k','.w...w.','..www..'],0),mkspr(['.......','ww.w.ww','..www..'],0),mkspr(['.......','..www..','.w...w.'],0)];
+const GULLSIT=mkspr(['.ww..','kwwo.','.wwww','..xw.','..o..'].map(s=>s.replace(/x/g,'L')),0);
+const FISH=mkspr(['.qq.q','qqqqq','.qq.q'],0);
+const CLOUDS=[];
+function mkCloud(w,seed){const h=18,a=new Uint8Array(w*h);let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147483647;const blobs=[];const n=3+(w>>4);
+ for(let i=0;i<n;i++){const bx=6+(w-12)*(i+.5)/n+(r()-.5)*4,br=3+r()*Math.min(5,w/7)+(i===n>>1?2:0);blobs.push([bx,h-3-br*.7,br])}
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let inn=false;for(const[bx,by,br]of blobs)if((x+.5-bx)**2+((y+.5-by)*1.15)**2<=br*br&&y<h-1)inn=true;if(inn)a[y*w+x]=C.cl}
+ // 底部阴影：每列最下 2 像素
+ for(let x=0;x<w;x++){let bot=-1;for(let y=h-1;y>=0;y--)if(a[y*w+x]){bot=y;break}if(bot>0){a[bot*w+x]=C.cls;if(bot>1&&a[(bot-1)*w+x]&&(x+bot)%3)a[(bot-1)*w+x]=C.cls}}
+ return{w,h,a}}
+[[46,3],[30,9],[60,15],[36,21],[24,33]].forEach(([w,s],i)=>CLOUDS.push({s:mkCloud(w,s),x:i*130+20,y:[18,34,10,46,26][i],sp:[.03,.05,.02,.06,.04][i]}));
+// 树冠（预渲染，逐行错位摆动）
+function mkTree(r,seed,apples){const w=r*2+6,h=r*2+4,a=new Uint8Array(w*h);let s=seed;const rn=()=>(s=(s*16807)%2147483647)/2147483647;
+ const bl=[[w/2,h/2,r]];for(let i=0;i<6;i++){const an=i/6*Math.PI*2;bl.push([w/2+Math.cos(an)*r*.6,h/2+Math.sin(an)*r*.45,r*.55+rn()*1.5])}
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){let inn=0,lt=0;for(const[bx,by,br]of bl){const d=(x+.5-bx)**2+(y+.5-by)**2;if(d<=br*br){inn=1;if((x+.5-bx+br*.35)**2+(y+.5-by+br*.4)**2<=(br*.55)**2)lt=1}}
+  if(inn)a[y*w+x]=lt?C.grL:(y>h*.62||x>w*.72?C.grD:C.gr)}
+ // 叶簇纹理
+ for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){const v=a[y*w+x];if(v===C.gr&&hsh(x,y+seed)%9===0)a[y*w+x]=C.grD;if(v===C.gr&&hsh(x+3,y)%13===0)a[y*w+x]=C.grL}
+ if(apples)for(const[ax,ay]of apples){a[ay*w+ax]=C.roR;a[ay*w+ax+1]=C.roR;a[(ay+1)*w+ax]=C.roD;a[(ay+1)*w+ax+1]=C.roR}
+ // 描边
+ const o=a.slice();for(let y=0;y<h;y++)for(let x=0;x<w;x++){if(a[y*w+x])continue;for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<w&&yy<h&&a[yy*w+xx]){o[y*w+x]=C.ink;break}}}
+ return{w,h,a:o}}
+const TREES=[{x:258,r:13,th:20,s:mkTree(13,5,[[9,11],[18,8],[22,16],[13,19],[25,11]])},{x:490,r:12,th:18,s:mkTree(12,11,0)},{x:120,r:8,th:12,s:mkTree(8,23,0),back:1}];
+const LAMPS=[127,338,481];
+// ---------- 状态 ----------
+let T=0,gm=17*60+20,phase='dusk',beam=1,muted=false,camX=0,mood=0;
+const fox={x:150,y:144,vy:0,air:0,face:1,tx:null,run:0,af:0,land:0,idle:0,emo:null,emoT:0,bub:null,bubT:0};
+const smoke=[],fw=[],sparks=[],splash=[],flash=[];let fwT=0,fwN=0,celebrate=0,resetOnDay=0;
+let gulls=[];for(let i=0;i<6;i++)gulls.push({a:i/6*Math.PI*2,r:28+(i%3)*9,ph:i*1.7,x:0,y:0,vx:0,vy:0,away:0});
+const perched=[{x:64,y:157,away:0,vx:0,vy:0},{x:98,y:157,away:0,vx:0,vy:0}];
+let gullScatter=0;
+const chicks=[{x:150,dir:1,st:0,t:0},{x:188,dir:-1,st:1,t:20}];
+const peng={t:80,fish:null};
+const cat={blink:0,t:0,meow:0};
+let seed=12345;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+const STARS=[];for(let i=0;i<56;i++)STARS.push({x:rnd()*W|0,y:rnd()*84|0,p:(rnd()*40)|0,b:rnd()<.25});
+const FLIES=[];for(let i=0;i<16;i++)FLIES.push({x:120+rnd()*420,y:0,p:rnd()*100,amp:6+rnd()*10});
+// ---------- 声音（Web Audio 合成 8-bit） ----------
+let AC=null,MG=null,noiseB=null,bgmOn=false,nextNote=0,noteI=0;
+function audioInit(){if(AC)return;try{AC=new (window.AudioContext||window.webkitAudioContext)();MG=AC.createGain();MG.gain.value=muted?0:.5;MG.connect(AC.destination);
+ noiseB=AC.createBuffer(1,AC.sampleRate*.5,AC.sampleRate);const d=noiseB.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;bgmOn=true;nextNote=AC.currentTime+.1;setInterval(sched,60)}catch(e){AC=null}}
+function tone(f,d,type,v,when,f2){if(!AC)return;const t=AC.currentTime+(when||0);const o=AC.createOscillator(),g=AC.createGain();o.type=type||'square';o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v||.05,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g);g.connect(MG);o.start(t);o.stop(t+d+.02)}
+function noise(d,v,when,fc){if(!AC)return;const t=AC.currentTime+(when||0);const s=AC.createBufferSource();s.buffer=noiseB;const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=fc||1200;const g=AC.createGain();g.gain.setValueAtTime(v||.1,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);s.connect(f);f.connect(g);g.connect(MG);s.start(t);s.stop(t+d)}
+const SFX={
+ pick(){[988,1319,1568,2093].forEach((f,i)=>tone(f,.12,'square',.04,i*.06))},
+ jump(){tone(330,.14,'square',.035,0,660)},land(){noise(.05,.05,0,600)},step(){tone(140,.03,'triangle',.03)},
+ door(){tone(220,.08,'triangle',.06);tone(165,.12,'triangle',.06,.08)},
+ peek(f){tone(f,.07,'square',.035,.15);tone(f*1.26,.09,'square',.035,.23)},
+ gull(){for(let i=0;i<4;i++)tone(1400-i*90,.09,'square',.025,i*.07,900)},
+ light(on){tone(on?660:440,.1,'sine',.06);tone(on?990:330,.16,'sine',.05,.08)},
+ sun(){[523,659,784].forEach((f,i)=>tone(f,.18,'triangle',.05,i*.07))},
+ launch(){noise(.35,.04,0,3000);tone(200,.35,'triangle',.02,0,900)},
+ boom(){noise(.6,.16,0,900);tone(90,.3,'square',.04,0,40)},
+ meow(){tone(700,.25,'triangle',.05,0,450)},cluck(){tone(600,.05,'square',.03);tone(500,.06,'square',.03,.07)},
+ happy(){tone(784,.1,'square',.04);tone(1047,.14,'square',.04,.1)},oops(){tone(500,.14,'square',.04,0,300)}};
+const MEL=[72,76,79,76,74,72,69,72, 74,77,81,79,76,74,72,0, 72,76,79,84,81,79,76,74, 72,74,76,79,74,72,72,0];
+const BAS=[48,0,55,0,45,0,52,0, 50,0,57,0,43,0,55,0, 48,0,55,0,53,0,52,0, 50,0,55,0,48,0,48,0];
+function mtof(m){return 440*Math.pow(2,(m-69)/12)}
+function sched(){if(!AC||!bgmOn)return;const step=60/96/2;while(nextNote<AC.currentTime+.25){const i=noteI%32,w=nextNote-AC.currentTime;
+ if(MEL[i])tone(mtof(MEL[i]-(phase==='night'?12:0)),step*1.6,'triangle',.03,w);if(BAS[i])tone(mtof(BAS[i]),step*1.8,'square',.012,w);
+ nextNote+=step;noteI++}}
+// ---------- 时段 ----------
+function phaseOf(m){m=((m%1440)+1440)%1440;if(m>=300&&m<420)return'dawn';if(m>=420&&m<1020)return'day';if(m>=1020&&m<1170)return'dusk';return'night'}
+function setPhase(p){if(p===phase)return;phase=p;palFrom=palCur.map(c=>c.slice());palTo=PALS[p];palK=0;palT=0;
+ if((p==='dawn'||p==='day')&&resetOnDay){ITEMS.forEach(i=>i.got=0);resetOnDay=0}}
+function nextPhase(){const st={dawn:420,day:1020,dusk:1170,night:300+1440};let m=st[phase];if(phase!=='night'&&m<gm%1440)m+=1440;gm=Math.floor(gm/1440)*1440+(phase==='night'?(gm%1440>=1170?1440+300:300):m);setPhase(phaseOf(gm))}
+// ---------- 交互 ----------
+function sunPos(){if(phase==='night')return[256,26,8];if(phase==='dusk')return[232,84,13];if(phase==='dawn')return[64,82,12];return[250,24,10]}
+function bubble(kind,t){fox.bub=kind;fox.bubT=t||40}
+function emote(e,t){fox.emo=e;fox.emoT=t;fox.idle=0}
+function click(sx,sy){audioInit();const wx=sx+Math.round(camX);
+ if(sx>=W-16&&sy<=14){muted=!muted;if(MG)MG.gain.value=muted?0:.5;return'mute'}
+ const[spx,spy,sr]=sunPos();if((sx-spx)**2+(sy-spy)**2<=(sr+4)**2){nextPhase();SFX.sun();return'sun'}
+ for(const g of gulls)if(!g.away&&Math.abs(wx-g.x)<8&&Math.abs(sy-g.y)<6){scatter();return'gulls'}
+ for(const g of perched)if(!g.away&&Math.abs(wx-g.x-2)<5&&Math.abs(sy-g.y-2)<5){scatter();return'gulls'}
+ if(wx>=LH.x-2&&wx<=LH.x+LH.w+2&&sy>=LH.base-LH.h-12&&sy<=LH.base){beam=!beam;SFX.light(beam);return'beam'}
+ const ci=HOUSES[4];if(Math.abs(wx-(ci.x+ci.w/2))<6&&sy>ci.base-ci.wh-ci.rh-12&&sy<ci.base-ci.wh-ci.rh+2){cat.meow=30;SFX.meow();return'cat'}
+ for(const h of HOUSES)if(wx>=h.x-3&&wx<h.x+h.w+3&&sy>=h.base-h.wh-h.rh&&sy<=h.base){if(!h.door){h.door=1;h.dt=0;SFX.door();SFX.peek(500+HOUSES.indexOf(h)*90)}return'house'}
+ for(const c of chicks)if(Math.abs(wx-c.x)<6&&Math.abs(sy-(gy(c.x)-5))<6){c.st=3;c.t=0;SFX.cluck();return'chick'}
+ if(Math.abs(wx-fox.x)<10&&sy>fox.y-28&&sy<fox.y){if(fox.emo==='sleep'||fox.idle>200){emote('surprised',20);bubble('!',24);SFX.oops()}else{emote('happy',28);bubble('heart',30);SFX.happy()}return'fox'}
+ // 地面：走/跑过去
+ fox.tx=Math.max(34,Math.min(544,wx));fox.run=Math.abs(fox.tx-fox.x)>110?1:0;fox.idle=0;fox.emo=null;return'walk'}
+function scatter(){gullScatter=170;SFX.gull();for(const g of gulls.concat(perched)){g.away=1;const a=-Math.PI/2+(rnd()-.5)*2.4;g.vx=Math.cos(a)*(1.6+rnd());g.vy=Math.sin(a)*(1.2+rnd()*.8)-.4}}
+cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();click(Math.floor((e.clientX-r.left)/r.width*W),Math.floor((e.clientY-r.top)/r.height*H))});
+// ---------- 逻辑 ----------
+function tick(){T++;gm+=1/4;setPhase(phaseOf(gm));
+ if(palK<4&&++palT%5===0){palK++;const k=palK/4;for(let i=1;i<33;i++)for(let c=0;c<3;c++)palCur[i][c]=Math.round(palFrom[i][c]+(palTo[i][c]-palFrom[i][c])*k);bakePal()}
+ // 狐兔
+ const f=fox;let moving=false;
+ if(f.tx!==null&&f.emoT<=0){const d=f.tx-f.x;if(Math.abs(d)<1.2){f.tx=null}else{moving=true;const dir=Math.sign(d);f.face=dir;const sp=f.run?1.55:.8;f.x+=dir*Math.min(sp,Math.abs(d));
+   if(!f.air&&gy(f.x+dir*5)<f.y-2){f.air=1;f.vy=-2.7;SFX.jump()}}}
+ if(!f.air){const g=gy(f.x);if(g>f.y+1){f.air=1;f.vy=-.6}else f.y=g}
+ if(f.air){f.vy+=.28;f.y+=f.vy;const g=gy(f.x);if(f.vy>0&&f.y>=g){f.y=g;f.air=0;f.land=3;SFX.land()}}
+ if(f.land>0)f.land--;
+ if(moving){f.af+=f.run?.75:.5;if(Math.floor(f.af)%3===0&&Math.floor(f.af-(f.run?.75:.5))%3!==0)SFX.step()}
+ if(f.emoT>0){f.emoT--;if(!f.emoT)f.emo=null}
+ if(!moving&&!f.air&&f.emoT<=0)f.idle++;else f.idle=0;
+ if(f.bubT>0){f.bubT--;if(!f.bubT)f.bub=null}
+ if(f.idle>24*9&&!f.bub&&T%40===0)bubble('z',30);
+ // 拾取
+ for(const it of ITEMS)if(!it.got&&Math.abs(f.x-it.x)<7&&Math.abs(f.y-(it.y+2))<10){it.got=1;bubble(it.k,40);SFX.pick();for(let i=0;i<10;i++)sparks.push({x:it.x,y:it.y-3,vx:Math.cos(i/10*6.28)*1.2,vy:Math.sin(i/10*6.28)*1.2-.4,l:14,c:C.lit});
+  if(!f.tx||Math.abs(f.tx-f.x)<12){f.tx=null;emote('happy',24)}
+  if(ITEMS.every(i=>i.got)){celebrate=40}}
+ if(celebrate>0&&--celebrate===0){if(phase!=='night'){gm=Math.floor(gm/1440)*1440+1180;setPhase('night')}fwT=24*7;fwN=0;resetOnDay=1;emote('happy',60)}
+ if(fwT>0){fwT--;if(fwT%14===0||fwT%23===0){const x=Math.round(camX)+40+rnd()*240;fw.push({x,y:120,vy:-3.1-rnd()*.5,c:[C.lit,C.pink,C.seaL,C.glow1,C.grL,C.foam][fwN++%6],fuse:24+rnd()*10|0});SFX.launch()}
+  if(fwT%30===0&&!fox.air&&fox.emo==='happy'){fox.air=1;fox.vy=-2.2}if(fwT%50===0)emote('happy',50)}
+ for(let i=fw.length-1;i>=0;i--){const r=fw[i];r.y+=r.vy;r.vy+=.045;if(--r.fuse<=0){fw.splice(i,1);SFX.boom();flash.push({x:r.x,y:r.y,l:4});const n=40;for(let k=0;k<n;k++){const a=k/n*6.283+rnd()*.08,s=(k%2?2.0:2.9)+rnd()*.3;sparks.push({x:r.x,y:r.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:44+rnd()*10|0,c:r.c,big:1})}}}
+ for(let i=sparks.length-1;i>=0;i--){const s=sparks[i];s.px=s.x;s.py=s.y;s.x+=s.vx;s.y+=s.vy;s.vx*=s.big?.93:.96;s.vy=s.vy*(s.big?.93:.96)+(s.big?.025:.08);if(--s.l<=0)sparks.splice(i,1)}
+ // 烟
+ if(T%7===0)HOUSES.forEach((h,i)=>{if((T/7+i)%2<1){const cx=h.x+Math.round(h.w*h.chim);smoke.push({x:cx+1,y:h.base-h.wh-chimY(h)-8,vx:-.12-rnd()*.08,vy:-.28-rnd()*.1,l:0})}});
+ for(let i=smoke.length-1;i>=0;i--){const s=smoke[i];s.l++;if(s.l%2===0){s.x+=s.vx*2+(Math.sin((s.l+i)/7)*.3);s.y+=s.vy*2}if(s.l>58)smoke.splice(i,1)}
+ // 门
+ for(const h of HOUSES)if(h.door){h.dt++;if(h.dt>110)h.door=0}
+ // 海鸥
+ if(gullScatter>0)gullScatter--;
+ gulls.forEach((g,i)=>{if(g.away){g.x+=g.vx;g.y+=g.vy;g.vy-=.01;if(gullScatter===0){const tx=110+Math.cos(T/90+g.a)*g.r*2.2,ty=48+Math.sin(T/90+g.a)*g.r*.35+Math.sin(T/20+g.ph)*2;g.x+=(tx-g.x)*.05;g.y+=(ty-g.y)*.05;if(Math.abs(tx-g.x)<2&&Math.abs(ty-g.y)<2)g.away=0}}
+  else{g.x=110+Math.cos(T/90+g.a)*g.r*2.2;g.y=48+Math.sin(T/90+g.a)*g.r*.35+Math.sin(T/20+g.ph)*2}});
+ perched.forEach((g,i)=>{if(g.away){if(!g.ox){g.ox=g.x;g.oy=g.y}g.x+=g.vx;g.y+=g.vy;if(gullScatter===0){g.x+=(g.ox-g.x)*.08;g.y+=(g.oy-g.y)*.08;if(Math.abs(g.ox-g.x)<1&&Math.abs(g.oy-g.y)<1){g.away=0;g.x=g.ox;g.y=g.oy}}}});
+ // 小鸡
+ chicks.forEach(c=>{c.t++;if(c.st===0){c.x+=c.dir*.35;if(c.x<140||c.x>200||rnd()<.006)c.dir*=-1;if(c.t>50){c.st=1;c.t=0}}else if(c.st===1){if(c.t>36){c.st=rnd()<.5?0:2;c.t=0}}else if(c.st===2){if(c.t>30){c.st=0;c.t=0}}else if(c.st===3){if(c.t>22){c.st=0;c.t=0;c.dir*=-1}}});
+ // 企鹅钓鱼
+ peng.t=(peng.t+1)%260;if(peng.t===200){peng.fish={t:0};for(let i=0;i<6;i++)splash.push({x:21,y:161,vx:(rnd()-.5)*1.4,vy:-1-rnd(),l:16})}
+ if(peng.fish&&++peng.fish.t>26)peng.fish=null;
+ for(let i=flash.length-1;i>=0;i--)if(--flash[i].l<=0)flash.splice(i,1);
+ for(let i=splash.length-1;i>=0;i--){const s=splash[i];s.x+=s.vx;s.y+=s.vy;s.vy+=.15;if(--s.l<=0)splash.splice(i,1)}
+ if(cat.meow>0)cat.meow--;
+ // 相机
+ const tgt=Math.max(0,Math.min(WW-W,fox.x-150));camX+=(tgt-camX)*.06;
+}
+function chimY(h){return Math.round(h.rh*(1-Math.abs(h.chim-.5)*2))-2}
+// ---------- 绘制 ----------
+const night=()=>phase==='night',warm=()=>phase==='night'||phase==='dusk';
+function drawSky(){const b=[[0,30,C.sk0],[30,52,C.sk1],[52,72,C.sk2],[72,92,C.sk3]];for(const[a,z,c]of b)buf.fill(c,a*W,z*W);
+ // 色带交界：阶梯形锯齿边（整像素，非抖动）
+ for(let k=1;k<b.length;k++){const y=b[k][0];for(let x=0;x<W;x++){const s=((x+k*7)>>3)%3;if(s===0)buf[(y-1)*W+x]=b[k][2];if(s===1&&y-2>=0&&((x>>3)&1))buf[(y-1)*W+x]=b[k][2]}}}
+function drawStars(){if(!night())return;OX=0;for(const s of STARS){const t=((T>>2)+s.p)%40;if(t<2)continue;if(s.b&&t>30&&t<34){px(s.x,s.y,C.foam);px(s.x-1,s.y,C.cl);px(s.x+1,s.y,C.cl);px(s.x,s.y-1,C.cl);px(s.x,s.y+1,C.cl)}else px(s.x,s.y,s.b?C.foam:C.cl)}}
+function drawSun(){OX=0;const[x,y,r]=sunPos();
+ if(phase==='night'){disc(x,y,r,C.foam);disc(x+4,y-2,r-1,C.sk0);px(x-4,y+1,C.cl);px(x-3,y+4,C.cl);return}
+ if(phase==='dusk'){disc(x,y,r+4,C.sk3);disc(x,y,r+2,C.peach)}
+ if(phase==='dawn')disc(x,y,r+3,C.sk3);
+ disc(x,y,r,C.glow1);disc(x,y,r-2,C.lit);disc(x-3,y-3,Math.max(2,r-7),C.cl)}
+function drawClouds(){for(const c of CLOUDS){OX=0;let x=((c.x-camX*.08+T*c.sp)%(W+80)+W+80)%(W+80)-60;blit(c.s,x,c.y)}}
+function drawMount(){OX=Math.round(camX*.12);for(let sx=0;sx<W;sx++){const x=sx+OX;let h=Math.round(7+7*Math.sin(x/41)+4*Math.sin(x/17+1.3)+2*Math.sin(x/6.3));if(h>3)for(let y=92-h;y<92;y++)buf[y*W+sx]=(y===92-h&&hsh(x,1)%3===0)?C.cls:C.mt1}
+ OX=Math.round(camX*.22);for(let sx=0;sx<W;sx++){const x=sx+OX;const k=x%260;let h=0;if(k<70)h=Math.round(9*Math.sin(k/70*Math.PI)+2*Math.sin(k/5));else if(k>150&&k<190)h=Math.round(5*Math.sin((k-150)/40*Math.PI));if(h>1)for(let y=92-h;y<92;y++)buf[y*W+sx]=C.mt2}
+ // 远处小岛 + 小屋（0.3 视差）
+ OX=Math.round(camX*.32);for(const ix of [60,330,610]){for(let i=-26;i<=26;i++){const hh=Math.round(Math.sqrt(Math.max(0,1-(i/26)**2))*7);for(let y=92-hh;y<92;y++)px(ix+i,y,C.mt2)}
+  for(let k=0;k<3;k++){const hx=ix-9+k*7,hy=86-(k===1?2:0);rect(hx,hy,5,4,C.mt2);px(hx+2,hy-1,C.mt2);rect(hx+1,hy-1,3,1,C.mt2);px(hx+2,hy-2,C.mt2);px(hx+2,hy+1,night()||phase==='dusk'?C.lit:C.mt1)}}}
+function drawSea(){const top=92;for(let y=top;y<H;y++){const c=y===top?C.seaL:(y<104?C.sea:(y<150?C.sea:C.seaD));buf.fill(c,y*W,y*W+W)}
+ for(let y=106;y<150;y+=2)for(let x=0;x<W;x++)if(((x+((y*5)>>1))>>2)%9===0&&(y&3)===0)buf[y*W+x]=C.seaD;
+ const[spx]=sunPos();
+ for(let y=top+2;y<H;y+=2){const depth=(y-top)/(H-top),ox=Math.round(camX*(.15+.85*depth));const cw=12+Math.round(depth*10);
+  for(let ci=Math.floor(ox/cw)-1;ci<=Math.floor((ox+W)/cw)+1;ci++){const hh=hsh(ci,y);if(hh%5>1)continue;const on=(((T>>2)+(hh>>4))%10);if(on>5)continue;const len=1+(hh>>8)%4+(on>2?1:0);const x=ci*cw-ox+(hh>>12)%cw;for(let i=0;i<len;i++)if(x+i>=0&&x+i<W)buf[y*W+x+i]=C.seaL}}
+ // 日/月光倒影柱
+ if(phase!=='day')for(let i=0;i<14;i++){const y=top+2+i*3;if(y>=H)break;const w=Math.max(2,14-i)+((T>>3)+i)%3,x=spx-(w>>1)+(((T>>2)+i*3)%5>2?1:-1);const c=phase==='night'?C.foam:C.lit;if(((T>>2)+i)%6!==0)for(let k=0;k<w;k++)if(x+k>=0&&x+k<W&&((k+i)%5!==3))buf[y*W+x+k]=c}}
+function drawSail(){OX=Math.round(camX*.3);const x=((T*.05)%(WW+60))+20,y=95;blit(mkSail,x,y)}
+const mkSail=mkspr(['..w....','..ww...','..www..','..wwww.','..wwwww','BBBBBBB','.BBBBB.'],0);
+function drawBeam(){if(!beam||!warm())return;OX=Math.round(camX);const lx=LH.x+LH.w/2,ly=LH.base-LH.h-10;const a=T/40;const cs=Math.cos(a);const dir=cs>=0?-1:1;const len=Math.round(Math.abs(cs)*170)+10;
+ for(let i=5;i<len;i++){const hw=1+Math.floor(i*.06);for(let k=-hw;k<=hw;k++){const c=(i<26&&k===0)?C.cl:(Math.abs(k)<=hw*.45?C.cls:C.sk3);px(lx+dir*i,ly+k,c)}}}
+function drawLighthouse(){const{x,w,base,h}=LH;const top=base-h;
+ for(let y=top;y<base;y++){const t=(y-top)/h,ww=Math.round(14+(w-14)*t),xx=x+Math.round((w-ww)/2);const band=Math.floor((y-top)/8)%2;
+  rect(xx,y,ww,1,band?C.roR:C.foam);rect(xx+ww-3,y,3,1,band?C.roD:C.cls);px(xx-1,y,C.ink);px(xx+ww,y,C.ink)}
+ rect(x+8,base-11,6,11,C.woM);rect(x+8,base-11,6,1,C.ink);px(x+12,base-5,C.lit);rect(x+9,top+16,3,4,C.ink);rect(x+9,top+32,3,4,C.ink);
+ // 回廊+灯室
+ rect(x-1,top-2,w+2,2,C.ink);for(let i=0;i<w;i+=3)px(x+i,top-4,C.ink);rect(x-1,top-5,w+2,1,C.ink);
+ rect(x+3,top-14,w-6,9,C.ink);const lit=beam?(T>>2)%2?C.lit:C.foam:C.sk2;rect(x+4,top-13,w-8,7,lit);rect(x+10,top-13,1,7,C.ink);
+ if(beam&&warm()){rect(x+2,top-15,w-4,1,C.glow1);px(x+2,top-14,C.glow1);px(x+w-3,top-14,C.glow1)}
+ for(let k=0;k<5;k++)rect(x+4+k,top-15-k,w-8-2*k,1,k===0?C.roD:C.roR);px(x+w/2,top-21,C.ink);px(x+w/2,top-20,C.ink);
+ // 底座岩
+ rect(x-3,base,w+6,3,C.clM);rect(x-3,base,w+6,1,C.stone)}
+function drawTerrain(){OX=Math.round(camX);for(let sx=0;sx<W;sx++){const x=sx+OX;if(x<110||x>=548)continue;const g=gy(x);
+  const pathT=g-5,pathB=g+1;
+  // 后草沿
+  for(let y=g-8;y<pathT;y++)buf[y*W+sx]=y===g-8?C.grL:C.gr;
+  // 石板路：错缝
+  for(let y=pathT;y<=pathB;y++){const row=Math.floor((y-pathT)/3.5);const off=(row*4+(Math.floor(g/6))*3);let c=C.stone;if((x+off)%9===0)c=C.clM;if(y===pathT+3)c=C.clM;if(y===pathT&&(x+off)%9===4)c=C.cl;buf[y*W+sx]=c}
+  buf[(pathB+1)*W+sx]=C.grD;buf[(pathB+2)*W+sx]=C.grD;if(hsh(x,3)%4===0)buf[(pathB+3)*W+sx]=C.grD;
+  // 崖体：错缝石块（灰泥线 + 顶面高光）
+  const base=pathB+3;for(let y=base;y<H;y++){const yy=y-base,ri=Math.floor(yy/6),ly=yy%6;const off=hsh(ri,7)%11;const lx=(x+off+ri*5)%11,bid=hsh(Math.floor((x+off+ri*5)/11),ri+31);
+   let c=C.clM;if(ly===5||lx===0)c=C.clD;else if(bid%5===0)c=(ly===0?C.clM:C.clD);else if(ly===0&&lx>1)c=bid%2?C.stone:C.clM;else if(lx===10)c=C.clD;buf[y*W+sx]=c}
+  // 藤蔓
+  const vh=hsh(x,77);if(vh%19===0){const L=4+(vh>>6)%12;for(let j=0;j<L;j++){const yy=base+j;if(yy>=H)break;const xs=sx+((j>>2)%2&&((vh>>3)&1)?1:0);if(xs<W)buf[yy*W+xs]=j%3===2?C.gr:C.grD;if(j%3===1&&xs+1<W)buf[yy*W+xs+1]=C.gr;if(j===L-1&&(vh>>9)%3===0&&xs<W)buf[yy*W+xs]=C.pink}}
+  // 台阶竖面
+  const gl=gy(x-1),gr2=gy(x+1);if(gl>g&&x>110){for(let y=g-8;y<gl+2;y++)buf[y*W+sx]=y<g-5?C.grD:C.ink}if(gr2>g&&x<547)for(let y=g-8;y<gr2+2;y++)buf[y*W+sx]=C.ink}
+ // 崖壁小木门（像素小屋入口）
+ {const dx=236,dy=152;for(let j=0;j<16;j++){const hw=j<3?[2,4,5][j]:6;rect(dx-hw,dy+j,hw*2,1,j<1?C.ink:C.woM)}for(let j=0;j<16;j++){px(dx-7,dy+j,C.ink);px(dx+6,dy+j,C.ink)}rect(dx-6,dy+3,1,12,C.ink);rect(dx-1,dy+1,1,15,C.woD);rect(dx+3,dy+3,1,12,C.woD);rect(dx-4,dy+3,1,12,C.woD);rect(dx-3,dy+5,2,2,warm()?C.lit:C.sk2);px(dx+1,dy+9,C.lit);rect(dx-8,dy+16,16,2,C.stone);rect(dx-8,dy+18,16,1,C.clD);
+  rect(dx+9,dy+2,3,4,C.ink);rect(dx+10,dy+3,1,2,warm()?C.lit:C.sk2);px(dx+10,dy+1,C.ink);if(night()){px(dx+8,dy+3,C.glow1);px(dx+12,dy+3,C.glow1);px(dx+10,dy+6,C.glow1)}}
+ // 左崖面 + 右崖面
+ for(let y=157;y<H;y++){px(110,y,C.ink)}
+ rect(547,112,1,68,C.ink);rect(548,120,2,60,C.clD);
+ // 拍崖浪花：逐帧
+ const ph=(T>>2)%8;const fr=[[0,0],[1,2],[2,4],[3,7],[2,9],[1,6],[0,3],[0,1]][ph];
+ for(let i=0;i<fr[1];i++){px(108-(i%3),175-i,C.foam);if(i%2)px(106-(i%4),176-i,C.seaL)}
+ for(let i=0;i<5;i++)px(100+i*2+((T>>3)%2),176+(i%2),C.foam);
+ for(let i=0;i<fr[1];i++){px(550+(i%3),174-i,C.foam)}
+ for(let i=0;i<5;i++)px(551+i*2-((T>>3)%2),175+(i%2),C.foam)}
+function drawPier(){OX=Math.round(camX);OY=-16;
+ for(let x=34;x<=106;x+=12){rect(x,148,3,26,C.woD);px(x+1,148,C.woM);const fy=157+((T>>3)+x)%2;rect(x-1,fy,5,1,C.foam)}
+ rect(30,141,80,6,C.woM);for(let x=30;x<110;x+=6)rect(x,141,1,6,C.woD);rect(30,147,80,1,C.ink);rect(30,141,80,1,C.fS);
+ // 栏杆
+ for(let x=32;x<110;x+=16){rect(x,133,2,8,C.woD)}rect(32,134,78,1,C.woM);
+ // 桶
+ rect(46,135,6,6,C.woM);rect(46,135,6,1,C.ink);rect(46,137,6,1,C.woD);rect(46,140,6,1,C.woD);
+ // 系船绳 + 小船
+ const by=(T>>4)%2;line(34,146,22,155+by,C.woM);
+ OX=Math.round(camX);const bx=2,byy=154+by;rect(bx+2,byy,24,2,C.woD);rect(bx,byy-1,28,1,C.ink);rect(bx+1,byy+2,26,3,C.woM);rect(bx+1,byy+3,26,1,C.roR);rect(bx+3,byy+5,22,1,C.woD);rect(bx+6,byy+6,16,1,C.ink);
+ line(bx+18,byy-1,bx+30,byy+6,C.woD);rect(bx-1,byy+7,30,1,C.seaL);
+ // 企鹅
+ const p=peng,pull=p.t>=196&&p.t<214;const pf=pull?1:((T>>4)%2&&0);blit(PENG[pull?1:0],32,132+((T>>4)%2&&!pull?1:0),0);
+ const tipx=pull?24:22,tipy=pull?124:126;line(33,138,tipx,tipy,C.woD);
+ const dip=p.t>180&&p.t<200?((T>>1)%2)+1:0,bob=(T>>3)%2;const bobx=18,boby=159+bob+dip;line(tipx,tipy,bobx,boby,C.cls);px(bobx,boby,C.roR);px(bobx,boby+1,C.foam);
+ if(p.t>=200||p.t<4){}
+ if(p.fish){const t=p.fish.t/26;const fx=20+t*28,fy=160-Math.sin(t*Math.PI)*28;blit(FISH,fx,fy,t>.5)}
+ for(const s of splash)px(s.x,s.y,C.foam);
+ OY=0;
+ // 停在桩上的海鸥
+ for(const g of perched){if(g.away){const f=((T>>1))%3;blit(GULL[f],g.x,g.y)}else blit(GULLSIT,g.x,g.y,g.x>80)}}
+function drawHouse(h,hi){const x=h.x,b=h.base,top=b-h.wh;const lit=warm()&&(phase==='night'||hi%2===0);
+ // 墙
+ rect(x,top,h.w,h.wh,C.wall);rect(x+h.w-4,top,4,h.wh,C.wallS);rect(x,b-3,h.w,3,C.stone);for(let i=0;i<h.w;i+=5)px(x+i+(hi%2),b-2,C.clM);rect(x,b-3,h.w,1,C.clM);
+ rect(x-1,top,1,h.wh,C.ink);rect(x+h.w,top,1,h.wh,C.ink);rect(x-1,b,h.w+2,1,C.ink);
+ if(h.timber){rect(x+1,top,2,h.wh-3,C.woD);rect(x+h.w-3,top,2,h.wh-3,C.woD);rect(x,top+Math.floor(h.wh/2),h.w,1,C.woD)}
+ if(h.two){rect(x,top+15,h.w,2,C.woD);rect(x,top+17,h.w,1,C.wallS)}
+ // 窗户（带光晕阶梯）
+ const wins=[];if(h.two){wins.push([x+6,top+4],[x+h.w/2-4,top+4],[x+h.w-14,top+4],[x+h.w-14,top+21])}else{wins.push([x+5,top+7]);if(h.w>=36)wins.push([x+h.w-13,top+7])}
+ for(const[wx,wy]of wins){if(lit&&phase==='night'){rect(wx-1,wy-2,9,11,C.peach);rect(wx-2,wy-1,11,9,C.peach);rect(wx,wy-1,7,9,C.glow1);rect(wx-1,wy,9,7,C.glow1)}else if(lit){rect(wx,wy-1,7,9,C.glow1);rect(wx-1,wy,9,7,C.glow1)}
+  rect(wx,wy,7,7,C.woD);rect(wx+1,wy+1,5,5,lit?C.lit:C.sk2);if(lit){rect(wx+1,wy+4,5,2,C.glow1)}else{px(wx+2,wy+2,C.cl);px(wx+3,wy+1,C.cl);px(wx+1,wy+3,C.cl)}
+  rect(wx+3,wy+1,1,5,C.woD);rect(wx+1,wy+3,5,1,C.woD);rect(wx-1,wy+7,9,1,C.woM);
+  if(h.box&&wy>top+10||h.box&&!h.two){rect(wx,wy+8,7,2,C.woD);for(let i=0;i<7;i+=2)px(wx+i,wy+7,(i/2+hi)%3?C.pink:C.lit);px(wx+1,wy+7,C.grD);px(wx+5,wy+7,C.grD)}}
+ // 门 + 门牌
+ const dw=9,dx=x+Math.floor(h.w/2)-4+(h.w>=40?-7:0),dh=15,dy=b-3-dh;rect(dx-1,dy-1,dw+2,dh+1,C.woD);
+ let open=0;if(h.door){open=h.dt<6?h.dt>>1:(h.dt>100?Math.max(0,3-((h.dt-100)>>1)):3)}
+ rect(dx,dy,dw,dh,C.ink);
+ if(open>=2&&h.dt>=8&&h.dt<102){const an=ANIM[h.an];const pk=Math.min(6,(h.dt-8)>>1);const ay=dy+dh-pk;blit(an,dx+1,ay);
+  if(h.dt>30&&h.dt<70){OX=OX;const hy=dy-9-((h.dt>>2)%2);drawHeart(dx+2,hy)}}
+ if(open<3){const ow=dw-open*2;rect(dx,dy,ow,dh,C.woM);for(let i=2;i<ow;i+=3)rect(dx+i,dy+1,1,dh-2,C.woD);px(dx+ow-2,dy+6,C.lit);if(open)rect(dx+ow,dy,1,dh,C.woD)}else{rect(dx,dy,1,dh,C.woM);}
+ if(open>=3&&!(h.dt>=8&&h.dt<102))rect(dx+1,dy,dw-1,dh,lit?C.glow1:C.ink);
+ rect(dx-1,b-3,dw+2,1,C.stone);
+ rect(dx+dw+2,dy+1,5,4,C.woD);rect(dx+dw+3,dy+2,3,2,C.lit);px(dx+dw+4,dy+2,C.woD);if(h.num>1)px(dx+dw+3,dy+3,C.woD);
+ // 遮阳棚
+ if(h.awn){for(let i=0;i<h.w+2;i++){const c=(i>>2)%2?C.foam:C.roR;rect(x-1+i,top+1,1,4,c);if(i%4<2)px(x-1+i,top+5,c)}rect(x-1,top,h.w+2,1,C.ink)}
+ // 屋顶：瓦片纹理
+ const rh=h.rh,ov=3;for(let r=0;r<=rh;r++){const t=r/rh;const half=Math.round(2+(h.w/2+ov-2)*t);const cx=x+h.w/2,y=top-rh+r;const L=Math.round(cx-half),Rr=Math.round(cx+half);
+  for(let xx=L;xx<Rr;xx++){let c=h.roof;const tr=r%3;if(tr===2)c=h.roof===C.roB?C.ink:(h.roof===C.woM?C.woD:C.roD);else if(((xx+(Math.floor(r/3)%2)*2)%4)===0&&tr===1)c=h.roof===C.roB?C.ink:(h.roof===C.woM?C.woD:C.roD);if(xx>cx+half-4&&tr!==2)c=h.roof===C.roR?C.roD:(h.roof===C.roB?C.ink:C.woD);if(h.roof===C.roB&&c===h.roof&&((xx+r)%7===0))c=C.seaL;px(xx,y,c)}
+  px(L-1,y,C.ink);px(Rr,y,C.ink)}
+ rect(x-ov-1,top+1,h.w+2*ov+2,1,C.ink);rect(x,top+1,h.w,1,C.wallS);rect(x+h.w/2-2,top-rh-1,4,1,C.ink);
+ // 烟囱
+ const cxp=x+Math.round(h.w*h.chim)-2,cy=top-chimY(h)-7;rect(cxp,cy,6,9,C.stone);rect(cxp+4,cy,2,9,C.clM);rect(cxp-1,cy-1,8,2,C.ink);rect(cxp-1,cy,1,9,C.ink);rect(cxp+6,cy,1,9,C.ink);
+ if(lit&&phase==='night')rect(cxp+1,cy+1,4,1,C.clD)}
+function drawHeart(x,y){const s=['.r.r.','rrrrr','rrrrr','.rrr.','..r..'];s.forEach((r,j)=>{for(let i=0;i<5;i++)if(r[i]==='r')px(x+i,y+j,C.pink)});px(x+1,y+1,C.foam)}
+function drawSmoke(){OX=Math.round(camX);for(const s of smoke){const c=s.l<30?(phase==='day'?C.stone:(night()?C.cls:C.cl)):(night()?C.mt1:C.cls);if(s.l<12){px(s.x,s.y,c);px(s.x+1,s.y,c)}else if(s.l<40){rect(s.x,s.y,2,2,c);px(s.x-1,s.y,c);px(s.x+2,s.y+1,c)}else{rect(s.x-1,s.y,3,3,c);px(s.x,s.y-1,c);px(s.x+2,s.y-1,C.cls)}}}
+const sway=()=>[0,1,1,0,0,-1][(T>>3)%6];
+function drawTree(t){const g=gy(t.x),sw=sway();rect(t.x-2,g-8-t.th,4,t.th+1,C.woD);rect(t.x-1,g-8-t.th,1,t.th+1,C.woM);px(t.x-3,g-8,C.woD);px(t.x+2,g-8,C.woD);px(t.x-3,g-9,C.woD);
+ blit(t.s,t.x-t.s.w/2,g-8-t.th-t.s.h+6,0,j=>j<t.s.h*.45?sw:(j<t.s.h*.7&&sw>0?0:0))}
+function drawFence(x0,x1){const g=gy(x0);for(let x=x0;x<x1;x+=4){rect(x,g-14,2,7,C.woM);px(x,g-15,C.woM);rect(x+2,g-14,0,0,0);px(x+1,g-14,C.fC)}rect(x0,g-12,x1-x0,1,C.woD);rect(x0,g-9,x1-x0,1,C.woD)}
+function drawLamp(x){const g=gy(x);rect(x,g-24,2,18,C.ink);rect(x-2,g-28,6,5,C.ink);const on=warm();rect(x-1,g-27,4,3,on?C.lit:C.sk2);px(x,g-29,C.ink);
+ if(on){rect(x-3,g-28,1,5,C.glow1);rect(x+4,g-28,1,5,C.glow1);rect(x-2,g-23,6,1,C.glow1);if(night()){rect(x-6,g-4,14,1,C.glow1);rect(x-9,g-3,20,1,C.peach)}}}
+function drawBush(x,y,w,seedv){for(let i=0;i<w;i++){const hgt=3+Math.round(Math.sin(i/w*Math.PI)*3);const sw=i>w/2&&(T>>3)%4===1?0:0;for(let j=0;j<hgt;j++)px(x+i,y-j,j===hgt-1?C.ink:(j>hgt-3?C.gr:C.grD))}
+ for(let i=1;i<w-1;i+=2){const hh=hsh(i,seedv);if(hh%3===0)continue;const fy=y-2-(hh>>4)%3;px(x+i,fy,[C.pink,C.lit,C.foam,C.roR][(hh>>6)%4])}}
+function drawClothes(){const a=172,b=196,g=gy(a);rect(a,g-27,2,20,C.woD);rect(b,g-27,2,20,C.woD);for(let x=a+2;x<b;x++){const y=g-26+Math.round(Math.sin((x-a)/(b-a)*Math.PI)*2);px(x,y,C.ink)}
+ const f=(T>>3)%3;const cl=[[176,C.roB,6],[184,C.foam,5],[190,C.pink,4]];cl.forEach(([x,c,w],i)=>{const y=g-25+Math.round(Math.sin((x-a+2)/(b-a)*Math.PI)*2);rect(x,y,w,i===1?7:5,c);px(x,y,C.ink);px(x+w-1,y,C.ink);const fl=(f+i)%3;if(fl===1)rect(x+1,y+(i===1?7:5),w-1,1,c);if(fl===2)rect(x-1,y+(i===1?6:4),1,1,c);if(i===0){rect(x-1,y,1,2,c);rect(x+w,y,1,2,c)}})}
+function drawProps(){OX=Math.round(camX);
+ drawFence(240,250);drawFence(472,480);drawFence(500,506);drawFence(232,236);
+ drawBush(170,121,6,1);drawBush(122+0,121,7,2);drawBush(240,121,9,3);drawBush(330,109,6,4);drawBush(376,109,6,5);drawBush(476,97,8,6);drawBush(530,97,10,7);
+ drawClothes();
+ // 信箱
+ const g2=gy(226);rect(226,g2-15,2,9,C.woD);rect(224,g2-19,7,5,C.roR);rect(224,g2-19,7,1,C.ink);px(229,g2-18,C.lit);
+ // 木桶/箱
+ rect(242,gy(242)-13,6,6,C.woM);rect(242,gy(242)-13,6,1,C.ink);rect(242,gy(242)-10,6,1,C.woD);
+ // 路牌
+ const g3=gy(420);rect(414,g3-18,2,12,C.woD);rect(410,g3-21,11,4,C.woM);rect(418,g3-20,2,2,C.ink);px(420,g3-19,C.ink);
+ TREES.forEach(drawTree);LAMPS.forEach(drawLamp)}
+function drawCat(){const h=HOUSES[4];const x=h.x+h.w/2-3,y=h.base-h.wh-h.rh-10;const bl=(T%70)<3;blit(CAT[bl?1:0],x,y);const tf=(T>>3)%3;for(const[tx,ty]of CATTAIL[tf]){px(x+tx+1,y+ty+1,C.peach);px(x+tx+2,y+ty+1,C.ink)}
+ if(cat.meow>0){drawNote(x+9,y-4-((cat.meow>>2)%2))}}
+function drawNote(x,y){rect(x+2,y,1,5,C.ink);px(x+3,y,C.ink);px(x+4,y+1,C.ink);rect(x,y+4,2,2,C.ink)}
+function drawChicks(){for(const c of chicks){const g=gy(c.x);let s=CHICK[0],yy=g-10;if(c.st===0)s=CHICK[(c.t>>2)%2?0:2];if(c.st===1)s=CHICK[((c.t>>3)%2)?1:0];if(c.st===3){s=CHICK[0];yy-=[0,2,4,5,4,2,0][Math.min(6,c.t>>1)]||0;if((c.t>>1)%2){px(c.x-2,yy+3,C.foam);px(c.x+9,yy+3,C.foam)}}blit(s,c.x-4,yy,c.dir<0)}}
+function drawGulls(){OX=Math.round(camX);for(const[i,g]of gulls.entries()){const f=((T>>2)+i)%4;blit(GULL[[0,1,2,1][f]],g.x-3,g.y)}}
+function drawItems(){for(const it of ITEMS){if(it.got)continue;const b=((T>>3)+it.x)%2;const s=ICON[it.k];blit(s,it.x-Math.floor(s.w/2),it.y-s.h-b);const sp=((T>>2)+it.x)%12;if(sp<3){const sx=it.x+[4,-4,2][sp%3],sy=it.y-s.h-3+[0,2,-2][sp%3];px(sx,sy,C.foam);if(sp===1){px(sx-1,sy,C.lit);px(sx+1,sy,C.lit);px(sx,sy-1,C.lit);px(sx,sy+1,C.lit)}}}}
+function foxPose(){const f=fox;let n='idle',t=T>>1;
+ if(f.air)n=f.vy<0?'jumpUp':'jumpDown';else if(f.land>0)n='crouch';else if(f.tx!==null&&f.emoT<=0){n=f.run?'run':'walk';t=Math.floor(f.af)}
+ else if(f.emo)n=f.emo;else if(f.idle>24*9)n='sleep';else if(f.idle>24*4)n='sit';
+ return Fox.pose(n,t)}
+function drawFox(){OX=Math.round(camX);const o=foxPose();const s=foxSpr(o);const flip=o.side?fox.face<0:fox.face<0;
+ // 影子
+ if(!fox.air||fox.y<gy(fox.x)-0){const g=gy(fox.x);rect(fox.x-7,g-1,14,1,isPier(fox.x)?C.woD:C.clM);rect(fox.x-5,g,10,1,isPier(fox.x)?C.woD:C.clM)}
+ blit(s,fox.x-16,fox.y-30,flip);
+ if(fox.bub)drawBubble()}
+function drawBubble(){const x=Math.round(fox.x)-7,y=Math.round(fox.y)-46-(fox.bubT>34?2:0);const w=15,h=12;
+ rect(x+1,y,w-2,h,C.foam);rect(x,y+1,w,h-2,C.foam);rect(x+1,y-1,w-2,1,C.ink);rect(x+1,y+h,w-2,1,C.ink);rect(x-1,y+1,1,h-2,C.ink);rect(x+w,y+1,1,h-2,C.ink);px(x,y,C.ink);px(x+w-1,y,C.ink);px(x,y+h-1,C.ink);px(x+w-1,y+h-1,C.ink);
+ px(x+6,y+h,C.foam);px(x+7,y+h,C.foam);px(x+6,y+h+1,C.ink);px(x+7,y+h+1,C.foam);px(x+8,y+h+1,C.ink);px(x+5,y+h,C.ink);px(x+8,y+h,C.ink);px(x+7,y+h+2,C.ink);
+ const k=fox.bub;if(ICON[k]){const s=ICON[k];blit(s,x+Math.floor((w-s.w)/2),y+Math.floor((h-s.h)/2))}
+ else if(k==='heart')drawHeart(x+5,y+3);
+ else if(k==='!'){rect(x+7,y+2,2,5,C.roR);rect(x+7,y+8,2,2,C.roR)}
+ else if(k==='z'){const zz=['kkkk','..k.','.k..','kkkk'];zz.forEach((r,j)=>{for(let i=0;i<4;i++)if(r[i]==='k')px(x+5+i,y+4+j,C.roB)});px(x+10,y+2,C.roB);px(x+11,y+2,C.roB)}}
+function drawFlies(){if(!night())return;OX=Math.round(camX);for(const f of FLIES){const t=T+f.p;const on=(t%60)<38;if(!on)continue;const x=f.x+Math.sin(t/37)*f.amp,y=gy(f.x)-14+Math.sin(t/23)*6;const br=(t%60)<20;if(br){px(x-1,y,C.glow1);px(x+1,y,C.glow1);px(x,y-1,C.glow1);px(x,y+1,C.glow1)}px(x,y,C.lit)}}
+function drawFW(){OX=0;const cx=Math.round(camX);for(const r of fw){px(r.x-cx,r.y,C.foam);px(r.x-cx,r.y+1,C.glow1);px(r.x-cx,r.y+3,C.glow1);if(T%2)px(r.x-cx,r.y+5,C.peach)}
+ for(const f of flash){disc(f.x-cx,f.y,f.l>2?3:2,C.foam);if(f.l>2){px(f.x-cx-5,f.y,C.lit);px(f.x-cx+5,f.y,C.lit);px(f.x-cx,f.y-5,C.lit);px(f.x-cx,f.y+5,C.lit)}}
+ for(const s of sparks){if(!s.big)continue;let c=s.l>38?C.foam:(s.l>16?s.c:(s.l>7?C.glow1:((T&1)?C.peach:0)));if(!c)continue;if(s.l>20&&s.px!==undefined){const tx=s.x-(s.x-s.px)*2.2,ty=s.y-(s.y-s.py)*2.2;line(s.px-cx,s.py,tx-cx,ty,s.l>38?s.c:(s.c===C.foam?C.cl:C.glow1))}px(s.x-cx,s.y,c);if(s.l>30)px(s.x-cx+1,s.y,c)}}
+function drawSparks(){OX=Math.round(camX);for(const s of sparks)if(!s.big)px(s.x,s.y,s.l>7?C.foam:C.lit)}
+function drawFore(){OX=Math.round(camX*1.3);const sw=sway();for(let sx=-6;sx<W+6;sx++){const x=sx+OX;const h=hsh(x>>1,9);if(h%5>1)continue;const hgt=3+(h>>5)%9;for(let j=0;j<hgt;j++){const xx=sx+(j>hgt*.55?sw:0)+(j>hgt-2&&(h>>3)&1?1:0);if(xx>=0&&xx<W)buf[(H-1-j)*W+xx]=j===hgt-1?C.grL:(j>2?C.gr:C.grD)}
+  if((h>>9)%9===0){const fx=sx+sw,fy=H-hgt-2;if(fx>0&&fx<W-1){const fc=[C.pink,C.lit,C.foam,C.roR][(h>>12)%4];buf[fy*W+fx]=fc;buf[fy*W+fx-1]=fc;buf[fy*W+fx+1]=fc;buf[(fy-1)*W+fx]=fc;buf[(fy+1)*W+fx]=C.glow1;buf[fy*W+fx]=C.lit}}}
+ for(let sx=0;sx<W;sx++){buf[(H-1)*W+sx]=C.grD;if(buf[(H-2)*W+sx]!==C.gr&&buf[(H-2)*W+sx]!==C.grL)buf[(H-2)*W+sx]=hsh(sx+OX,4)%3?C.grD:buf[(H-2)*W+sx]}}
+// UI：像素字 3x5
+const FONT={'0':'111101101101111','1':'010110010010111','2':'111001111100111','3':'111001111001111','4':'101101111001001','5':'111100111001111','6':'111100111101111','7':'111001010010010','8':'111101111101111','9':'111101111001111',':':'000010000010000','/':'001001010100100'};
+function text(s,x,y,c){OX=0;for(const ch of s){const g=FONT[ch];if(g)for(let i=0;i<15;i++)if(g[i]==='1')px(x+i%3,y+(i/3|0),c);x+=4}}
+function panel(x,y,w,h){OX=0;rect(x+1,y,w-2,h,C.woD);rect(x,y+1,w,h-2,C.woD);rect(x+1,y+1,w-2,1,C.woM);rect(x+1,y-1,w-2,1,C.ink);rect(x+1,y+h,w-2,1,C.ink);rect(x-1,y+1,1,h-2,C.ink);rect(x+w,y+1,1,h-2,C.ink);px(x,y,C.ink);px(x+w-1,y,C.ink);px(x,y+h-1,C.ink);px(x+w-1,y+h-1,C.ink)}
+function drawUI(){OX=0;panel(3,3,66,13);ITEMS.forEach((it,i)=>{const s=ICON[it.k];const x=6+i*10,y=5;if(it.got)blit(s,x+Math.floor((9-s.w)/2),y+Math.floor((9-s.h)/2));else{for(let j=0;j<s.h;j++)for(let k=0;k<s.w;k++){const v=s.a[j*s.w+k];if(v&&v!==C.ink)px(x+Math.floor((9-s.w)/2)+k,y+Math.floor((9-s.h)/2)+j,C.woM)}}});
+ text(ITEMS.filter(i=>i.got).length+'/5',56,7,C.lit);
+ panel(3,19,40,9);const m=((Math.floor(gm)%1440)+1440)%1440;const hh=String(Math.floor(m/60)).padStart(2,'0'),mm=String(Math.floor(m%60/10)*10).padStart(2,'0');
+ // 时段小图标
+ const ic=phase==='night'?C.foam:(phase==='day'?C.lit:C.glow1);rect(6,21,5,5,ic);px(6,21,C.woD);px(10,21,C.woD);px(6,25,C.woD);px(10,25,C.woD);if(phase==='night'){rect(8,21,3,3,C.woD)}
+ text(hh+((T>>4)%2?':':' ')+mm,14,21,C.fC);
+ // 静音键
+ panel(W-15,3,12,10);rect(W-13,6,2,4,C.fC);rect(W-11,5,1,6,C.fC);rect(W-10,4,1,8,C.fC);if(muted){px(W-8,6,C.roR);px(W-6,8,C.roR);px(W-7,7,C.roR);px(W-8,8,C.roR);px(W-6,6,C.roR)}else{rect(W-8,6,1,4,C.fC);rect(W-6,5,1,6,C.fC)}}
+function render(){OX=0;drawSky();drawStars();drawSun();drawFW();drawClouds();drawMount();drawSea();drawSail();
+ OX=Math.round(camX);drawBeam();
+ OX=Math.round(camX);drawGulls();
+ OX=Math.round(camX);TREES.filter(t=>t.back).forEach(drawTree);
+ drawTerrain();OX=Math.round(camX);HOUSES.forEach(drawHouse);drawLighthouse();drawCat();drawSmoke();
+ drawProps();drawPier();OX=Math.round(camX);drawItems();drawChicks();drawFox();drawSparks();drawFlies();drawFore();drawUI();
+ for(let i=0;i<buf.length;i++)u32[i]=pal32[buf[i]];ctx.putImageData(img,0,0)}
+// 驱动：固定 24 tick/s
+window.__manual=/manual/.test(location.search);
+window.__step=n=>{for(let i=0;i<n;i++)tick();render()};window.__click=click;window.__cw=(x,y)=>click(Math.round(x-Math.round(camX)),y);window.__st=()=>({phase,gm,fox:{x:fox.x,y:fox.y},got:ITEMS.map(i=>i.got),cam:camX});
+window.__png=()=>cv.toDataURL('image/png');
+let acc=0,last=performance.now();
+function loop(now){acc+=Math.min(200,now-last);last=now;let n=0;while(acc>=1000/24&&n<6){tick();acc-=1000/24;n++}if(n)render();requestAnimationFrame(loop)}
+camX=Math.max(0,fox.x-150);render();if(!window.__manual)requestAnimationFrame(loop);
+</script>

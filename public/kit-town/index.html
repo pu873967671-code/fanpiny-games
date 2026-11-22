@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>狐兔小镇</title>
+<style>
+@font-face{font-family:KL;src:url(assets/kl.woff2) format('woff2');font-display:block}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:#cfe6b8;font-family:KL,"PingFang SC","Microsoft YaHei",sans-serif;user-select:none;-webkit-user-select:none;touch-action:none}
+#view{position:fixed;inset:0;overflow:hidden;cursor:grab}
+#view.drag{cursor:grabbing}
+#world{position:absolute;left:0;top:0;width:1536px;height:1024px;transform-origin:0 0;will-change:transform}
+#bg{position:absolute;inset:0;width:1536px;height:1024px;pointer-events:none}
+.cloud{position:absolute;border-radius:50%;pointer-events:none;mix-blend-mode:multiply;
+  background:radial-gradient(closest-side,rgba(70,90,120,.17),rgba(70,90,120,.07) 60%,rgba(70,90,120,0));z-index:2000}
+.bld{position:absolute;transform-origin:50% 100%;cursor:pointer;-webkit-user-drag:none;
+  animation:sway var(--d,5s) ease-in-out var(--dl,0s) infinite alternate}
+.bld img{display:block;width:100%;height:auto;pointer-events:none;-webkit-user-drag:none;transition:filter .25s}
+.bld.hot{animation:boing .62s cubic-bezier(.3,1.6,.5,1) forwards}
+.bld.hot img{filter:drop-shadow(0 0 10px rgba(255,248,190,.95)) drop-shadow(0 0 22px rgba(255,220,120,.7)) brightness(1.06)}
+@keyframes sway{from{transform:rotate(-.7deg) scaleY(1)}to{transform:rotate(.7deg) scaleY(1.012)}}
+@keyframes boing{0%{transform:scale(1)}35%{transform:scale(1.12,1.06)}60%{transform:scale(.98,1.04)}80%{transform:scale(1.07,1.05)}100%{transform:scale(1.06)}}
+.ring{position:absolute;border-radius:50%;pointer-events:none;border:4px solid rgba(255,250,210,.0);
+  background:radial-gradient(closest-side,rgba(255,246,190,.55),rgba(255,246,190,0));opacity:0;transition:opacity .3s;transform:translate(-50%,-50%) scaleY(.42)}
+.ring.on{opacity:1;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{transform:translate(-50%,-50%) scale(1.12,.48)}}
+#kit{position:absolute;width:116px;height:120px;pointer-events:auto;cursor:pointer;margin-left:-58px;margin-top:-118px;transform-origin:50% 100%}
+#kitimg{width:100%;height:100%;background:url(assets/kit_walk.webp) 0 0/800% 100% no-repeat;transform-origin:50% 100%}
+#shadow{position:absolute;width:84px;height:20px;margin:-12px 0 0 -42px;border-radius:50%;background:radial-gradient(closest-side,rgba(60,80,40,.32),rgba(60,80,40,0));pointer-events:none}
+#fx,#petals{position:absolute;left:0;top:0;pointer-events:none}
+#fx{width:1536px;height:1024px;z-index:3000}
+#petals{position:fixed;inset:0;width:100%;height:100%;z-index:5}
+#title{position:fixed;left:0;right:0;top:max(14px,env(safe-area-inset-top));text-align:center;pointer-events:none;z-index:10}
+#title h1{margin:0;font-size:clamp(34px,6.4vmin,58px);color:#7a4a2a;letter-spacing:.12em;font-weight:normal;
+  text-shadow:0 2px 0 #fff8ea,0 0 2px #fff8ea,2px 0 0 #fff8ea,-2px 0 0 #fff8ea,0 -2px 0 #fff8ea,0 6px 14px rgba(120,70,40,.25)}
+#title p{margin:2px 0 0;font-size:clamp(16px,2.8vmin,22px);color:#8a5b3a;text-shadow:0 0 3px #fff8ea,0 0 6px #fff8ea,0 1px 0 #fff8ea}
+#sign{position:fixed;z-index:20;width:250px;height:163px;pointer-events:none;transform-origin:50% 0;opacity:0;
+  transform:translateY(-10px) rotate(-6deg) scale(.7);transition:opacity .18s}
+#sign.on{opacity:1;animation:swing .9s cubic-bezier(.3,1.5,.5,1) forwards}
+@keyframes swing{0%{transform:translateY(-10px) rotate(-8deg) scale(.7)}45%{transform:translateY(0) rotate(5deg) scale(1.03)}70%{transform:rotate(-2.5deg) scale(1)}100%{transform:rotate(0) scale(1)}}
+#sign img{position:absolute;inset:0;width:100%;height:100%}
+#sign .t{position:absolute;left:12%;right:12%;top:44%;bottom:12%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#6b3f20;line-height:1.2}
+#sign b{font-weight:normal;font-size:23px;letter-spacing:.06em}
+#sign span{font-size:15.5px;white-space:nowrap;margin-top:3px;color:#7d5232}
+#veil{position:fixed;inset:0;z-index:40;pointer-events:none;background:radial-gradient(circle at 50% 50%,#fffaf0,#ffe9d2 70%,#ffd9c0);clip-path:circle(0 at 50% 50%)}
+#veil .paw{position:absolute;left:50%;top:50%;width:120px;height:120px;margin:-60px;opacity:0}
+#game{position:fixed;inset:0;z-index:50;display:none;background:#fff8ee;clip-path:circle(0 at 50% 50%)}
+#game iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff8ee}
+#back{position:fixed;left:max(10px,env(safe-area-inset-left));top:max(10px,env(safe-area-inset-top));z-index:60;width:132px;height:62px;display:none;cursor:pointer;
+  border:0;padding:0;background:none;font:inherit;animation:bob 2.4s ease-in-out infinite}
+#back img{position:absolute;left:0;top:0;width:52px;height:62px;filter:drop-shadow(0 3px 4px rgba(90,50,20,.35))}
+#back span{position:absolute;left:30px;top:15px;height:34px;line-height:34px;padding:0 12px 0 28px;border-radius:17px;background:#fff6e4;color:#7a4a2a;font-size:19px;
+  box-shadow:0 3px 0 #e2b98d,0 4px 10px rgba(90,50,20,.25);z-index:-1;white-space:nowrap}
+#back span{transition:opacity .3s,transform .3s;transform-origin:0 50%}
+#back.mini span{opacity:0;transform:scaleX(.3)}
+#back.mini:hover span,#back.mini:focus-visible span{opacity:1;transform:none}
+#back:hover{transform:scale(1.07)}
+#back:active{transform:scale(.94)}
+@keyframes bob{50%{transform:translateY(-3px) rotate(-2deg)}}
+#cursor{position:fixed;left:0;top:0;width:34px;height:34px;margin:-3px 0 0 -5px;z-index:99;pointer-events:none;display:none;transform-origin:5px 3px;transition:transform .08s;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cpath d='M5 3 L5 27 L11 21 L15 31 L20 29 L16 19 L25 19 Z' fill='%23fff' stroke='%23704020' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat;filter:drop-shadow(0 2px 2px rgba(0,0,0,.3))}
+#cursor.dn{transform:scale(.8)}
+#cursor.dn::after{content:'';position:absolute;left:-13px;top:-15px;width:36px;height:36px;border-radius:50%;border:3px solid rgba(255,160,190,.9);animation:clk .35s ease-out forwards}
+@keyframes clk{from{transform:scale(.3);opacity:1}to{transform:scale(1.3);opacity:0}}
+#hint{position:fixed;bottom:max(10px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;color:#6f5a3a;font-size:14px;z-index:10;pointer-events:none;
+  text-shadow:0 0 4px #fff8ea,0 0 8px #fff8ea;opacity:.85}
+@media (prefers-reduced-motion:reduce){.bld{animation:none}}
+</style>
+</head>
+<body>
+<div id="view">
+  <div id="world">
+    <img id="bg" src="assets/town.webp" alt="">
+    <canvas id="fx" width="1536" height="1024"></canvas>
+    <div id="shadow"></div>
+    <div id="kit" title="狐兔"><div id="kitimg"></div></div>
+  </div>
+</div>
+<canvas id="petals"></canvas>
+<div id="title"><h1>狐兔小镇</h1><p>点点房子，进去玩</p></div>
+<div id="hint">← 左右拖动，看看小镇别的地方 →</div>
+<div id="sign"><img src="assets/plank.webp" alt=""><div class="t"><b></b><span></span></div></div>
+<div id="veil"></div>
+<div id="game"><iframe id="frame" title="小游戏" allow="autoplay; accelerometer; gyroscope"></iframe></div>
+<button id="back" aria-label="回小镇"><span>回小镇</span><img src="assets/badge.webp" alt=""></button>
+<div id="cursor"></div>
+<script>
+(()=>{
+const W=1536,H=1024;
+// 地点：图片、在世界中的位置（cx=中心x，by=底边y，w=显示宽度）、狐兔停靠点、烟囱
+const PLACES=[
+ {id:'shoe', name:'鞋子琴', tip:'点糖果鞋，弹一首歌', img:'shoe', cx:262, by:612, w:286, ar:613/640, stop:[440,640], game:'games/shoe.html', smoke:[0.70,0.07]},
+ {id:'dawn', name:'团子山谷', tip:'歪歪山谷，滚团子开花', img:'dawn', cx:352, by:362, w:312, ar:428/640, stop:[520,420], game:'games/dawn.html'},
+ {id:'pop',  name:'立体书小路', tip:'陪狐兔散步，翻书页', img:'pop', cx:752, by:860, w:372, ar:437/640, stop:[600,872], game:'games/popup.html'},
+ {id:'xmas', name:'窗台看雪', tip:'擦擦窗雾，一起看雪', img:'xmas', cx:1300, by:612, w:282, ar:631/640, stop:[1110,640], game:'games/xmas.html', smoke:[0.33,0.06]},
+ {id:'tree', name:'树屋大厅', tip:'签到领金币，去冒险', img:'tree', cx:1240, by:345, w:262, ar:640/551, stop:[1060,410], game:'games/lobby.html'},
+ {id:'tarot',name:'占卜屋', tip:'摸摸塔罗牌，翻开看看', img:'tarot', cx:1215, by:858, w:222, ar:729/640, stop:[1100,872], via:[[1000,700],[1122,772]], game:'games/tarot.html', glow:[0.5,0.62]},
+ {id:'magic',name:'魔法草地', tip:'挥挥魔杖，种花放星星', img:'magic', cx:985, by:378, w:160, ar:974/640, stop:[1012,428], via:[[965,560]], game:'games/magic.html', glow:[0.5,0.55]},
+ {id:'pencil',name:'彩铅画室', tip:'拿起彩铅，给野餐涂色', img:'pencil', cx:288, by:832, w:200, ar:694/640, stop:[398,738], via:[[560,640]], game:'games/pencil.html', chips:[0.62,0.28]},
+];
+const HOME=[762,578];
+const $=s=>document.querySelector(s);
+const view=$('#view'),world=$('#world'),kit=$('#kit'),kimg=$('#kitimg'),shadow=$('#shadow'),fx=$('#fx'),fc=fx.getContext('2d');
+const sign=$('#sign'),veil=$('#veil'),game=$('#game'),frame=$('#frame'),back=$('#back'),pet=$('#petals'),pc=pet.getContext('2d');
+const DEMO=/demo/.test(location.search);
+let rnd=Math.random; if(DEMO){let s=7;rnd=()=>{s=(s*16807)%2147483647;return (s-1)/2147483646}}
+
+// 建筑
+for(const p of PLACES){
+  const h=p.w*p.ar;
+  const ring=document.createElement('div');ring.className='ring';
+  Object.assign(ring.style,{left:p.cx+'px',top:(p.by-h*0.08)+'px',width:p.w*1.15+'px',height:p.w*1.15+'px',zIndex:p.by-1});
+  world.appendChild(ring);p.ring=ring;
+  const d=document.createElement('div');d.className='bld';d.dataset.id=p.id;d.setAttribute('role','button');d.setAttribute('aria-label',p.name+'：'+p.tip);d.tabIndex=0;
+  Object.assign(d.style,{left:(p.cx-p.w/2)+'px',top:(p.by-h)+'px',width:p.w+'px',height:h+'px',zIndex:p.by,'--d':(4+rnd()*2.5).toFixed(2)+'s','--dl':(-rnd()*4).toFixed(2)+'s'});
+  d.innerHTML=`<img src="assets/${p.img}.webp" alt="" draggable="false">`;
+  world.appendChild(d);p.el=d;p.h=h;
+}
+// 云影
+const clouds=[];
+for(let i=0;i<3;i++){const c=document.createElement('div');c.className='cloud';const s=380+i*120;
+  Object.assign(c.style,{width:s+'px',height:s*0.55+'px'});world.appendChild(c);clouds.push({el:c,x:-400+i*700,y:180+i*260,v:14+i*4,s})}
+
+// 视图：铺满+拖动平移
+let sc=1,ox=0,oy=0,minX=0,minY=0;
+function layout(){
+  const vw=innerWidth,vh=innerHeight;
+  sc=Math.max(vw/W,vh/H);
+  minX=vw-W*sc;minY=vh-H*sc;
+  if(first){ox=minX/2;oy=minY/2;first=false}
+  clampPan();
+  pet.width=vw*devicePixelRatio;pet.height=vh*devicePixelRatio;
+  $('#hint').style.display=(minX<-40||minY<-40)?'block':'none';
+}
+let first=true;
+function clampPan(){ox=Math.min(0,Math.max(minX,ox));oy=Math.min(0,Math.max(minY,oy));world.style.transform=`translate(${ox}px,${oy}px) scale(${sc})`}
+addEventListener('resize',()=>{layout();placeSign()});
+const toWorld=(x,y)=>[(x-ox)/sc,(y-oy)/sc];
+
+// 狐兔
+const K={x:HOME[0],y:HOME[1],path:[],dir:1,t:0,frame:0,hop:0,state:'idle',target:null,speed:270};
+function drawKit(dt){
+  K.t+=dt;
+  if(K.path.length){
+    const [tx,ty]=K.path[0];const dx=tx-K.x,dy=ty-K.y,d=Math.hypot(dx,dy),step=K.speed*dt;
+    if(Math.abs(dx)>2)K.dir=dx>0?1:-1;
+    if(d<=step){K.x=tx;K.y=ty;K.path.shift();if(!K.path.length)arrive()}
+    else{K.x+=dx/d*step;K.y+=dy/d*step}
+    K.frame=(K.frame+dt*11)%8;
+    if(rnd()<dt*7)puff(K.x-K.dir*20,K.y-4,1);
+  }else{K.frame=0}
+  K.hop=Math.max(0,K.hop-dt);
+  const hopY=K.hop>0?-Math.sin((1-K.hop/0.45)*Math.PI)*36:0;
+  const walking=K.path.length>0;
+  const bob=walking?-Math.abs(Math.sin(K.t*11*Math.PI/4))*3:0;
+  const breathe=walking?1:1+Math.sin(K.t*2.6)*0.018;
+  kit.style.left=K.x+'px';kit.style.top=K.y+'px';kit.style.zIndex=Math.round(K.y);
+  kimg.style.backgroundPosition=`${Math.floor(K.frame)/7*100}% 0`;
+  kimg.style.transform=`translateY(${hopY+bob}px) scale(${K.dir*(2-breathe)},${breathe})`;
+  shadow.style.left=K.x+'px';shadow.style.top=K.y+'px';shadow.style.zIndex=Math.round(K.y)-1;
+  shadow.style.transform=`scale(${1+hopY/120})`;
+}
+function walkTo(p){
+  K.target=p;K.state='walk';
+  const [sx,sy]=p.stop;
+  // 简单路径：先走到小镇中间的小路口，再去目的地（目的地就在旁边时直接走）
+  const near=Math.hypot(sx-K.x,sy-K.y)<260;
+  K.path=near?[[sx,sy]]:[[HOME[0],HOME[1]],...(p.via||[]),[sx,sy]];
+  if(!near&&Math.hypot(K.x-HOME[0],K.y-HOME[1])<30)K.path.shift();
+  follow=true;
+}
+function arrive(){
+  const p=K.target;if(!p)return;
+  K.hop=0.45;K.dir=p.cx>K.x?1:-1;
+  hearts(K.x,K.y-120,5);
+  setTimeout(()=>openGame(p),430);
+}
+
+// 拖动 / 点击
+let down=null,moved=false,follow=false;
+view.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY,ox,oy};moved=false;follow=false});
+addEventListener('pointermove',e=>{
+  if(down){const dx=e.clientX-down.x,dy=e.clientY-down.y;
+    if(!moved&&Math.hypot(dx,dy)>8){moved=true;view.classList.add('drag')}
+    if(moved){ox=down.ox+dx;oy=down.oy+dy;clampPan();placeSign()}}
+  if(e.pointerType==='mouse'&&!down)hoverAt(e.clientX,e.clientY);
+});
+addEventListener('pointerup',e=>{
+  if(down&&!moved)tapAt(e.clientX,e.clientY,e.pointerType);
+  down=null;view.classList.remove('drag');
+});
+addEventListener('pointercancel',()=>{down=null;view.classList.remove('drag')});
+function placeAt(x,y){
+  const el=document.elementFromPoint(x,y);
+  const b=el&&el.closest&&el.closest('.bld');
+  return b?PLACES.find(p=>p.id===b.dataset.id):null;
+}
+let hot=null,busy=false;
+function setHot(p){
+  if(hot===p)return;
+  if(hot){hot.el.classList.remove('hot');hot.ring.classList.remove('on')}
+  hot=p;
+  if(p){p.el.classList.add('hot');p.ring.classList.add('on');sparkle(p.cx,p.by-p.h*0.6,10)}
+  showSign(p);
+}
+function hoverAt(x,y){if(busy)return;if(K.state==='walk')return;setHot(placeAt(x,y))}
+function tapAt(x,y,type){
+  if(busy)return;
+  const el=document.elementFromPoint(x,y);
+  if(el&&el.closest&&el.closest('#kit')){K.hop=0.45;hearts(K.x,K.y-120,4);return}
+  const p=placeAt(x,y);
+  if(p){setHot(p);walkTo(p);return}
+  if(K.state!=='walk')setHot(null);
+  const [wx,wy]=toWorld(x,y);sparkle(wx,wy,6);
+}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&busy){closeGame();return}
+  if((e.key==='Enter'||e.key===' ')&&document.activeElement&&document.activeElement.classList.contains('bld')){
+    const p=PLACES.find(q=>q.id===document.activeElement.dataset.id);if(p&&!busy){setHot(p);walkTo(p)}e.preventDefault()}
+});
+for(const p of PLACES){p.el.addEventListener('focus',()=>{if(!busy&&K.state!=='walk')setHot(p)})}
+
+// 木牌
+function showSign(p){
+  if(!p){sign.classList.remove('on');return}
+  sign.querySelector('b').textContent=p.name;sign.querySelector('span').textContent=p.tip;
+  sign.classList.remove('on');void sign.offsetWidth;sign.classList.add('on');placeSign();
+}
+function placeSign(){
+  if(!hot)return;const p=hot;
+  const sw=250,sh=163,vw=innerWidth,vh=innerHeight;
+  let x=ox+p.cx*sc-sw/2, y=oy+(p.by-p.h)*sc-sh+18;
+  if(y<70){                                  // 上面放不下：挂到房子旁边（右边优先），再不行挂下面
+    const bx=ox+p.cx*sc, half=p.w*sc/2, my=oy+(p.by-p.h*.55)*sc-sh/2;
+    if(bx+half+sw+8<vw){x=bx+half*0.8;y=my}
+    else if(bx-half-sw-8>0){x=bx-half*0.8-sw;y=my}
+    else y=oy+p.by*sc-10;
+  }
+  y=Math.max(6,Math.min(vh-sh-6,y));
+  x=Math.max(6,Math.min(vw-sw-6,x));
+  sign.style.left=x+'px';sign.style.top=y+'px';
+}
+
+// 转场 + 游戏
+let circleAt=[0,0];
+function openGame(p){
+  busy=true;setHot(p);
+  const sx=ox+K.x*sc,sy=oy+(K.y-60)*sc;circleAt=[sx,sy];
+  const R=Math.hypot(Math.max(sx,innerWidth-sx),Math.max(sy,innerHeight-sy))+10;
+  frame.src=p.game;
+  veil.animate([{clipPath:`circle(0px at ${sx}px ${sy}px)`},{clipPath:`circle(${R}px at ${sx}px ${sy}px)`}],{duration:620,easing:'cubic-bezier(.55,0,.35,1)',fill:'forwards'});
+  setTimeout(()=>{
+    game.style.display='block';back.style.display='block';
+    const cx=innerWidth/2,cy=innerHeight/2,R2=Math.hypot(cx,cy)+10;
+    game.animate([{clipPath:`circle(0px at ${cx}px ${cy}px)`},{clipPath:`circle(${R2}px at ${cx}px ${cy}px)`}],{duration:560,easing:'cubic-bezier(.3,0,.2,1)',fill:'forwards'});
+    back.classList.remove('mini');clearTimeout(miniT);miniT=setTimeout(()=>back.classList.add('mini'),2600);
+    back.animate([{transform:'translateX(-160px)'},{transform:'translateX(8px)'},{transform:'translateX(0)'}],{duration:520,delay:300,easing:'ease-out',fill:'backwards'});
+    sign.classList.remove('on');
+  },650);
+  K.state='in';
+}
+frame.addEventListener('load',()=>{
+  try{const w=frame.contentWindow;w.addEventListener('keydown',e=>{if(e.key==='Escape')closeGame()});}catch(e){}
+});
+function closeGame(){
+  if(!busy||closing)return;closing=true;
+  const cx=innerWidth/2,cy=innerHeight/2,R2=Math.hypot(cx,cy)+10;
+  back.style.display='none';
+  game.animate([{clipPath:`circle(${R2}px at ${cx}px ${cy}px)`},{clipPath:`circle(0px at ${cx}px ${cy}px)`}],{duration:480,easing:'cubic-bezier(.6,0,.4,1)',fill:'forwards'});
+  setTimeout(()=>{
+    game.style.display='none';frame.src='about:blank';
+    const [sx,sy]=circleAt,R=Math.hypot(Math.max(sx,innerWidth-sx),Math.max(sy,innerHeight-sy))+10;
+    veil.animate([{clipPath:`circle(${R}px at ${sx}px ${sy}px)`},{clipPath:`circle(0px at ${sx}px ${sy}px)`}],{duration:620,easing:'cubic-bezier(.55,0,.35,1)',fill:'forwards'});
+    setHot(null);K.state='idle';K.target=null;
+    setTimeout(()=>{busy=false;closing=false;K.hop=0.45;hearts(K.x,K.y-120,6);window.focus()},600);
+  },500);
+}
+let closing=false,miniT=0;
+back.addEventListener('click',closeGame);
+
+// 粒子：炊烟、尘土、星光、爱心（世界坐标）
+const parts=[];
+function puff(x,y,n){for(let i=0;i<n;i++)parts.push({k:'dust',x,y,vx:(rnd()-.5)*30,vy:-10-rnd()*15,l:0,L:.6,r:6+rnd()*5})}
+function sparkle(x,y,n){for(let i=0;i<n;i++){const a=rnd()*6.28,s=60+rnd()*120;parts.push({k:'star',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,l:0,L:.7+rnd()*.4,r:5+rnd()*5,c:['#fff6b0','#ffd1e0','#c8f0ff','#fff'][i%4]})}}
+function hearts(x,y,n){for(let i=0;i<n;i++)parts.push({k:'heart',x:x+(rnd()-.5)*40,y,vx:(rnd()-.5)*60,vy:-70-rnd()*60,l:-i*.08,L:1.2,r:9+rnd()*5})}
+function heartPath(c,x,y,r){c.beginPath();c.moveTo(x,y+r*.35);c.bezierCurveTo(x-r*1.1,y-r*.4,x-r*.5,y-r*1.1,x,y-r*.45);c.bezierCurveTo(x+r*.5,y-r*1.1,x+r*1.1,y-r*.4,x,y+r*.35);c.fill()}
+let smokeT=0,twT=0;
+function stepFx(dt,t){
+  smokeT+=dt;
+  if(smokeT>.22){smokeT=0;for(const p of PLACES)if(p.smoke){
+    const sx=p.cx-p.w/2+p.w*p.smoke[0],sy=p.by-p.h+p.h*p.smoke[1];
+    parts.push({k:'smoke',x:sx,y:sy,vx:6+rnd()*6,vy:-22-rnd()*10,l:0,L:3.2,r:8+rnd()*4})}}
+  for(const p of PLACES)if(p.glow&&rnd()<dt*3.2){const a=rnd()*6.28,r=p.w*(.32+rnd()*.25);
+    parts.push({k:'mote',x:p.cx+Math.cos(a)*r,y:p.by-p.h*p.glow[1]+Math.sin(a)*r*.7,vx:(rnd()-.5)*8,vy:-8-rnd()*10,l:0,L:1.6+rnd(),r:2.5+rnd()*2.5})}
+  for(const p of PLACES)if(p.chips&&rnd()<dt*2.2){const c=['#ff8a80','#ffc46b','#ffe66d','#8fd694','#7fb8f0','#c39bf0'][Math.floor(rnd()*6)];
+    parts.push({k:'chip',x:p.cx-p.w/2+p.w*(p.chips[0]+(rnd()-.5)*.5),y:p.by-p.h+p.h*p.chips[1],vx:(rnd()-.5)*30,vy:-30-rnd()*25,l:0,L:1.8+rnd()*.6,r:3+rnd()*2.5,c,rot:rnd()*6})}
+  twT+=dt;if(twT>.18){twT=0;parts.push({k:'tw',x:690+rnd()*170,y:425+rnd()*55,vx:0,vy:0,l:0,L:.9,r:3+rnd()*3})}
+  fc.clearRect(0,0,W,H);
+  for(let i=parts.length-1;i>=0;i--){const q=parts[i];q.l+=dt;if(q.l>=q.L){parts.splice(i,1);continue}if(q.l<0)continue;
+    const u=q.l/q.L;q.x+=q.vx*dt;q.y+=q.vy*dt;
+    if(q.k==='smoke'){q.vx+=4*dt;const r=q.r*(1+u*2.4);const g=fc.createRadialGradient(q.x,q.y,0,q.x,q.y,r);
+      const a=.42*Math.sin(u*Math.PI);g.addColorStop(0,`rgba(250,250,252,${a})`);g.addColorStop(1,'rgba(250,250,252,0)');fc.fillStyle=g;fc.fillRect(q.x-r,q.y-r,2*r,2*r)}
+    else if(q.k==='dust'){fc.fillStyle=`rgba(225,200,150,${.5*(1-u)})`;fc.beginPath();fc.arc(q.x,q.y,q.r*(1+u),0,7);fc.fill()}
+    else if(q.k==='star'){q.vx*=.94;q.vy*=.94;const r=q.r*(1-u*.6);fc.fillStyle=q.c;fc.globalAlpha=1-u;fc.save();fc.translate(q.x,q.y);fc.rotate(u*3);
+      fc.beginPath();for(let j=0;j<8;j++){const rr=j%2?r*.38:r;fc.lineTo(Math.cos(j*Math.PI/4)*rr,Math.sin(j*Math.PI/4)*rr)}fc.fill();fc.restore();fc.globalAlpha=1}
+    else if(q.k==='heart'){q.vy+=40*dt;fc.globalAlpha=Math.min(1,(1-u)*2);fc.fillStyle='#ff8fb1';heartPath(fc,q.x,q.y,q.r*(0.6+Math.min(1,u*4)*.4));fc.globalAlpha=1}
+    else if(q.k==='mote'){const a=Math.sin(u*Math.PI);fc.globalAlpha=a;fc.fillStyle=u<.5?'#fff3b0':'#e7d4ff';fc.save();fc.translate(q.x,q.y);fc.rotate(u*2);
+      fc.beginPath();for(let j=0;j<8;j++){const rr=j%2?q.r*.35:q.r;fc.lineTo(Math.cos(j*Math.PI/4)*rr,Math.sin(j*Math.PI/4)*rr)}fc.fill();fc.restore();fc.globalAlpha=1}
+    else if(q.k==='chip'){q.vy+=60*dt;q.vx*=.98;fc.globalAlpha=Math.min(1,(1-u)*2.5);fc.fillStyle=q.c;fc.save();fc.translate(q.x,q.y);fc.rotate(q.rot+u*5);
+      fc.beginPath();fc.moveTo(-q.r,0);fc.quadraticCurveTo(0,-q.r*1.1,q.r,0);fc.quadraticCurveTo(0,q.r*.5,-q.r,0);fc.fill();fc.restore();fc.globalAlpha=1}
+    else if(q.k==='tw'){fc.globalAlpha=Math.sin(u*Math.PI);fc.fillStyle='#fff';fc.beginPath();fc.arc(q.x,q.y,q.r*Math.sin(u*Math.PI),0,7);fc.fill();fc.globalAlpha=1}
+  }
+  for(const c of clouds){c.x+=c.v*dt;if(c.x>W+200)c.x=-c.s-200;c.el.style.transform=`translate(${c.x}px,${c.y+Math.sin(t*.1+c.s)*20}px)`}
+}
+// 花瓣（屏幕坐标）
+const petals=[];
+for(let i=0;i<26;i++)petals.push(newPetal(true));
+function newPetal(init){return{x:rnd()*innerWidth,y:init?rnd()*innerHeight:-20,vy:22+rnd()*26,ph:rnd()*6,sp:.8+rnd()*1.2,r:5+rnd()*4,rot:rnd()*6,c:['#ffc4d6','#ffd9e4','#fff1f5','#ffe2a8'][Math.floor(rnd()*4)]}}
+function stepPetals(dt,t){
+  const d=devicePixelRatio;pc.setTransform(d,0,0,d,0,0);pc.clearRect(0,0,innerWidth,innerHeight);
+  for(const p of petals){p.y+=p.vy*dt;p.x+=Math.sin(t*p.sp+p.ph)*24*dt+10*dt;p.rot+=dt*p.sp;
+    if(p.y>innerHeight+20||p.x>innerWidth+20)Object.assign(p,newPetal(false),{x:rnd()*innerWidth*1.1-40});
+    pc.save();pc.translate(p.x,p.y);pc.rotate(p.rot);pc.scale(1,.55+.45*Math.sin(t*p.sp*2+p.ph));pc.fillStyle=p.c;pc.globalAlpha=.85;
+    pc.beginPath();pc.ellipse(0,0,p.r,p.r*.62,0,0,7);pc.fill();pc.restore()}
+}
+// 狐兔走动时镜头跟随（拖动后停止跟随）
+function followCam(dt){
+  if(!follow||!K.path.length)return;
+  const tx=innerWidth/2-K.x*sc,ty=innerHeight*0.55-K.y*sc;
+  ox+=(tx-ox)*Math.min(1,dt*2.2);oy+=(ty-oy)*Math.min(1,dt*2.2);clampPan();placeSign();
+}
+// 主循环
+let last=performance.now(),T=0;
+function loop(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;
+  if(!busy||K.state!=='in'){drawKit(dt);stepFx(dt,T);followCam(dt)}
+  stepPetals(dt,T);
+  requestAnimationFrame(loop);
+}
+layout();requestAnimationFrame(loop);
+// 竖屏：开场从左边慢慢平移到中间，让人知道小镇可以拖
+if(minX<-200&&!DEMO){const end=ox;ox=0;clampPan();const t0=performance.now();
+  (function intro(n){if(down||moved)return;const u=Math.min(1,(n-t0-600)/2600);if(u>0){ox=end*(u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2);clampPan()}if(u<1)requestAnimationFrame(intro)})(t0)}
+// 演示用的假鼠标
+if(DEMO){const c=$('#cursor');c.style.display='block';
+  window.__cur=(x,y,dn)=>{c.style.left=x+'px';c.style.top=y+'px';c.classList.toggle('dn',!!dn)};
+  addEventListener('pointermove',e=>__cur(e.clientX,e.clientY));}
+window.__town={PLACES,K,toScreen:(x,y)=>[ox+x*sc,oy+y*sc],openGame,closeGame};
+})();
+</script>
+</body>
+</html>
