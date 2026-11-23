@@ -92,7 +92,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:#cfe6b8;font-family:KL
 <div id="hint">拖动看看小镇 · 点房子，狐兔带你去</div>
 <div id="sign"><img src="town-assets/plank.webp" alt=""><div class="t"><b></b><span></span></div></div>
 <div id="veil"></div>
-<div id="game"><iframe id="frame" title="小游戏" allow="autoplay; accelerometer; gyroscope"></iframe></div>
+<div id="game"></div>
 <button id="back" aria-label="回小镇"><span>回小镇</span><img src="town-assets/badge.webp" alt=""></button>
 <div id="cursor"></div>
 <script>
@@ -118,7 +118,7 @@ const PLACES=[
 const HOME=[820,520];
 const $=s=>document.querySelector(s);
 const view=$('#view'),world=$('#world'),kit=$('#kit'),kimg=$('#kitimg'),shadow=$('#shadow'),fx=$('#fx'),fc=fx.getContext('2d');
-const sign=$('#sign'),veil=$('#veil'),game=$('#game'),frame=$('#frame'),back=$('#back'),pet=$('#petals'),pc=pet.getContext('2d');
+const sign=$('#sign'),veil=$('#veil'),game=$('#game'),back=$('#back'),pet=$('#petals'),pc=pet.getContext('2d');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const catalog=document.querySelector('#catalog'), catalogOpen=document.querySelector('#catalogOpen'), catalogClose=document.querySelector('#catalogClose');
 const list=document.querySelector('#catalogList');
@@ -279,7 +279,7 @@ function openGame(p){
   busy=true;setHot(p);
   const sx=ox+K.x*sc,sy=oy+(K.y-60)*sc;circleAt=[sx,sy];
   const R=Math.hypot(Math.max(sx,innerWidth-sx),Math.max(sy,innerHeight-sy))+10;
-  frame.src=p.href;
+  newFrame(p.href);
   veil.animate([{clipPath:`circle(0px at ${sx}px ${sy}px)`},{clipPath:`circle(${R}px at ${sx}px ${sy}px)`}],{duration:reduced?1:620,easing:'cubic-bezier(.55,0,.35,1)',fill:'forwards'});
   setTimeout(()=>{
     game.style.display='block';back.style.display='block';
@@ -291,18 +291,25 @@ function openGame(p){
   },reduced?1:650);
   K.state='in';
 }
-frame.addEventListener('load',()=>{
-  try{const w=frame.contentWindow;w.addEventListener('keydown',e=>{if(e.key==='Escape')closeGame()});}catch(e){}
-});
+let frame=null;
+// 每次新建 iframe：先设 src 再挂载，不产生会话历史；关闭时整个移除，返回一次就回小镇
+function newFrame(src){
+  if(frame)frame.remove();
+  frame=document.createElement('iframe');
+  frame.title='小游戏';frame.allow='autoplay; accelerometer; gyroscope';
+  frame.src=src;
+  frame.addEventListener('load',()=>{try{frame.contentWindow.addEventListener('keydown',e=>{if(e.key==='Escape')closeGame()})}catch(e){}});
+  game.appendChild(frame);
+}
 function closeGame(fromHistory=false){
   if(!busy||closing)return;
-  if(!fromHistory && history.state && history.state.townWork){history.back();return}
   closing=true;
+  if(!fromHistory && history.state && history.state.townWork)history.replaceState(null,'',location.pathname);
   const cx=innerWidth/2,cy=innerHeight/2,R2=Math.hypot(cx,cy)+10;
   back.style.display='none';
   game.animate([{clipPath:`circle(${R2}px at ${cx}px ${cy}px)`},{clipPath:`circle(0px at ${cx}px ${cy}px)`}],{duration:reduced?1:480,easing:'cubic-bezier(.6,0,.4,1)',fill:'forwards'});
   setTimeout(()=>{
-    game.style.display='none';frame.src='about:blank';
+    game.style.display='none';if(frame){frame.remove();frame=null}
     const [sx,sy]=circleAt,R=Math.hypot(Math.max(sx,innerWidth-sx),Math.max(sy,innerHeight-sy))+10;
     veil.animate([{clipPath:`circle(${R}px at ${sx}px ${sy}px)`},{clipPath:`circle(0px at ${sx}px ${sy}px)`}],{duration:reduced?1:620,easing:'cubic-bezier(.55,0,.35,1)',fill:'forwards'});
     setHot(null);K.state='idle';K.target=null;
