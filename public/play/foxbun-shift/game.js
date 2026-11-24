@@ -109,7 +109,8 @@ const ASSET_NAMES = [
   "ledge_s", "ledge_m", "gear_platform", "tuft1", "tuft2", "tuft3",
   "spire", "coin1", "coin2", "coin3", "gate", "shell_wall", "save", "wind",
 ];
-const HERO_FRAMES = Array.from({ length: 10 }, (_, frame) => `hero/hero_0${frame}`);
+const HERO_FRAMES = [...Array.from({ length: 10 }, (_, frame) => `hero/hero_0${frame}`),
+  ...Array.from({ length: 4 }, (_, frame) => `hero/rotor_${frame}`)];
 ASSET_NAMES.push(...HERO_FRAMES, ...ROOM_ART);
 
 const KEY_ACTIONS = {
@@ -1236,9 +1237,9 @@ function drawHero() {
     drawHeroFrame(8, trail.x, trail.y, trail.facing, 0, trail.life * 2.6);
   }
   const frames = { idle: 0, run: 1 + Math.floor(hero.poseTime * 9) % 4,
-    jump: 5, fall: 6, wall: 7, dash: 8, glide: 9 };
+    jump: 5, fall: 6, wall: 7, dash: 8, glide: 10 + Math.floor(hero.poseTime * 16) % 4 };
   const frame = frames[hero.pose];
-  const bob = frame === 9 ? Math.floor(hero.poseTime * 10) % 2 : 0;
+  const bob = frame >= 10 ? Math.floor(hero.poseTime * 10) % 2 : 0;
   const alpha = hero.hurt > 0 && Math.floor(hero.hurt * 16) % 2 ? 0.45 : 1;
   drawHeroFrame(frame, hero.x, hero.y - bob, hero.facing, hero.squash, alpha);
 }
