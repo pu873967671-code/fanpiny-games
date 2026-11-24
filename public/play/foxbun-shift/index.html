@@ -4,38 +4,53 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#14123a">
-  <title>狐兔 · 齿轮沙漠星 | Foxbun: Gear Desert</title>
+  <title>狐兔换挡 | Foxbun Shift</title>
   <link rel="icon" href="assets/coin1.png">
   <link rel="stylesheet" href="style.css">
+  <script src="world.js" defer></script>
+  <script src="boss.js" defer></script>
   <script src="game.js" defer></script>
 </head>
 <body>
-  <main id="viewport" aria-label="狐兔 · 齿轮沙漠星">
+  <main id="viewport" aria-label="狐兔换挡 / Foxbun Shift">
     <div id="scene">
-      <canvas id="game" width="480" height="270" aria-label="齿轮沙漠星第一关"></canvas>
+      <canvas id="game" width="480" height="270" aria-label="狐兔换挡游戏 / Foxbun Shift game"></canvas>
       <div id="title-screen" hidden>
-        <h1>狐兔 <span>·</span> 齿轮沙漠星 <small>Foxbun: Gear Desert</small></h1>
+        <h1>狐兔 <span>·</span> 换挡 <small>Foxbun Shift</small></h1>
         <button id="start" type="button">点击开始 / Click to start</button>
       </div>
       <p id="load-error" role="alert" hidden>资源加载失败 / Could not load assets</p>
       <div id="hints">
         <p id="move-hint" class="hint" hidden>◀ ▶ 移动 / Move　跳 / Jump</p>
         <p id="glide-hint" class="hint" hidden>空中按住跳 = 滑翔 / Hold jump to glide</p>
-        <p id="shift-hint" class="hint" hidden>Shift = 换挡 / shift gears</p>
-        <p id="wall-hint" class="hint" hidden>需要扒墙能力，之后再回来 / Return with wall climb</p>
+        <p id="shift-hint" class="hint" hidden>借气流升高再换挡 / Ride the updraft, then shift</p>
+        <p id="ability-hint" class="hint" role="status" hidden></p>
+        <p id="room-hint" class="hint" role="status" hidden></p>
       </div>
       <div id="touch-controls" hidden>
         <div class="directions">
-          <button type="button" data-action="left" aria-label="向左">◀</button>
-          <button type="button" data-action="right" aria-label="向右">▶</button>
+          <button type="button" data-action="left" aria-label="向左 / Left">◀</button>
+          <button type="button" data-action="right" aria-label="向右 / Right">▶</button>
+          <button type="button" data-action="up" aria-label="向上瞄准 / Aim up" hidden>▲</button>
+          <button type="button" data-action="down" aria-label="向下瞄准 / Aim down" hidden>▼</button>
         </div>
         <button type="button" data-action="shift" aria-label="换挡 / Shift gears">换挡</button>
-        <button type="button" data-action="jump" aria-label="跳跃">跳</button>
+        <button type="button" data-action="jump" aria-label="跳跃 / Jump">跳</button>
+        <button type="button" data-action="bounce" aria-label="尾弹 / Tail Bounce" hidden>尾弹</button>
+        <button type="button" data-action="dash" aria-label="冲刺 / Dash" hidden>冲刺</button>
+        <button type="button" data-action="map" aria-label="地图 / Map">地图</button>
       </div>
+      <section id="map-overlay" role="dialog" aria-modal="true" aria-labelledby="map-title" hidden>
+        <div class="panel map-panel">
+          <h2 id="map-title">地图 / Map</h2>
+          <ul id="map-rooms"></ul>
+          <button id="map-close" type="button">返回 / Back</button>
+        </div>
+      </section>
       <div id="completion" role="dialog" aria-modal="true" aria-labelledby="completion-title" hidden>
         <div class="panel">
           <img src="assets/coin1.png" width="30" height="30" alt="">
-          <h2 id="completion-title">第一关完成！<br>Level clear!</h2>
+          <h2 id="completion-title">通关！<br>Adventure complete!</h2>
           <p id="result"></p>
           <button id="replay" type="button">再玩一次 / Play again</button>
         </div>
