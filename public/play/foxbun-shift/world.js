@@ -12,6 +12,8 @@ const ROOM_ART = [
   "mon/mon_00", "mon/mon_01", "mon/mon_02", "mon/mon_03", "mon/mon_06",
   "bg/zone3_nest", "mon/mon_04", "mon/mon_05", "mon/mon_07",
   "mon/boss_03",
+  ...["mon_00", "mon_01", "mon_02", "mon_03", "mon_04", "mon_05", "mon_06", "mon_07", "boss_03"]
+    .flatMap(name => [0, 1, 2, 3].map(i => `mon/${name}_${i}`)),
 ];
 
 function groundRun(x, tiles, y = 230) {

@@ -1171,7 +1171,9 @@ function drawEnemies() {
       drawSprite("tuft3", x - 14, enemy.y - 24);
       continue;
     }
-    const sprite = art[`mon/mon_0${enemy.kind}`];
+    const step = (Math.floor(worldTime * 7 + enemy.x * 0.013) % 4 + 4) % 4;
+    const frameIndex = enemy.kind === 5 ? 1 + step % 3 : step;
+    const sprite = art[`mon/mon_0${enemy.kind}_${frameIndex}`] || art[`mon/mon_0${enemy.kind}`];
     ctx.save();
     ctx.translate(x, Math.round(enemy.y));
     ctx.scale(enemy.facing, 1);

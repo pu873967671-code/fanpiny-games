@@ -138,7 +138,10 @@ function drawBoss(boss) {
   if (boss.stage === "warning") drawGlow(x - 48, y - 42, 28 + pulse * 8, "#ffa285ef");
   if (boss.invulnerable > 0 && Math.floor(worldTime * 15) % 2) ctx.globalAlpha = 0.62;
   if (boss.stage === "defeated") ctx.globalAlpha = 0.42;
-  drawSprite("mon/boss_03", x - 70, y - 105 + Math.round(pulse));
+  const bossStep = Math.floor(worldTime * 6) % 4;
+  const bossArt = ASSET_NAMES.includes(`mon/boss_03_${bossStep}`) ? `mon/boss_03_${bossStep}` : "mon/boss_03";
+  const bossImg = roomSprite(bossArt);
+  drawSprite(bossArt, x - Math.round(bossImg.width / 2), y - bossImg.height + 1 + Math.round(pulse));
   ctx.globalAlpha = 1;
 
   const crystal = boss.crystal;
