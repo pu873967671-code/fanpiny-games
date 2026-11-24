@@ -203,7 +203,7 @@ function loadImage(name) {
       resolve();
     };
     image.onerror = () => reject(new Error(`Unable to load assets/${name}.png`));
-    image.src = `assets/${name}.png`;
+    image.src = `assets/${name}.png?v=20261124b`;
   });
 }
 
