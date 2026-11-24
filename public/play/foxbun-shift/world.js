@@ -1,10 +1,10 @@
 "use strict";
 
 const ABILITIES = {
-  rotor: { frame: 9, color: "#a8fff0", tip: "耳旋翼 · 按住跳跃滑翔 / Ear Rotor · Hold jump to glide" },
-  wall: { frame: 7, color: "#ffdc9a", tip: "扒墙 · 朝墙移动，再跳离墙面 / Wall Jump · Hold toward a wall, then jump" },
-  bounce: { frame: 5, color: "#f8a7f7", tip: "尾弹 · 空中近身按 X/J，再用方向键瞄准 / Tail Bounce · X/J in air, then aim" },
-  dash: { frame: 8, color: "#91d8ff", tip: "冲刺 · 空中按 C/L 和方向键 / Dash · C/L and a direction in the air" },
+  rotor: { frame: 18, color: "#a8fff0", tip: "耳旋翼 · 按住跳跃滑翔 / Ear Rotor · Hold jump to glide" },
+  wall: { frame: 16, color: "#ffdc9a", tip: "扒墙 · 朝墙移动，再跳离墙面 / Wall Jump · Hold toward a wall, then jump" },
+  bounce: { frame: 13, color: "#f8a7f7", tip: "尾弹 · 空中近身按 X/J，再用方向键瞄准 / Tail Bounce · X/J in air, then aim" },
+  dash: { frame: 17, color: "#91d8ff", tip: "冲刺 · 空中按 C/L 和方向键 / Dash · C/L and a direction in the air" },
 };
 
 const ROOM_ART = [

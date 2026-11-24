@@ -109,8 +109,12 @@ const ASSET_NAMES = [
   "ledge_s", "ledge_m", "gear_platform", "tuft1", "tuft2", "tuft3",
   "spire", "coin1", "coin2", "coin3", "gate", "shell_wall", "save", "wind",
 ];
-const HERO_FRAMES = [...Array.from({ length: 10 }, (_, frame) => `hero/hero_0${frame}`),
-  ...Array.from({ length: 4 }, (_, frame) => `hero/rotor_${frame}`)];
+const HERO_FRAMES = [
+  "idle-0", "idle-1", "idle-2", "idle-3",
+  "run-0", "run-1", "run-2", "run-3", "run-4", "run-5", "run-6", "run-7",
+  "jump-0", "jump-1", "jump-2", "jump-3", "wall-0", "dash-0",
+  "rotor_0", "rotor_1", "rotor_2", "rotor_3",
+].map(name => `hero/${name}`);
 ASSET_NAMES.push(...HERO_FRAMES, ...ROOM_ART);
 
 const KEY_ACTIONS = {
@@ -1222,8 +1226,8 @@ function drawHeroFrame(frame, x, y, facing, squash, alpha) {
   const scaleX = HERO_SCALE * (1 + squash);
   const drawWidth = Math.round(width * scaleX);
   const drawHeight = Math.round(height * HERO_SCALE * (1 - squash));
-  // The wall in frame 07 starts at source column 32.
-  const anchor = frame === 7 ? (32 - left) * scaleX - HALF_HERO : drawWidth / 2;
+  // Frames share one 72x56 canvas; column 36 is the hero's centre line.
+  const anchor = name.includes("rotor") ? drawWidth / 2 : (36 - left) * scaleX;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(Math.round(x - cameraX), Math.round(y));
@@ -1234,12 +1238,18 @@ function drawHeroFrame(frame, x, y, facing, squash, alpha) {
 
 function drawHero() {
   for (const trail of afterimages) {
-    drawHeroFrame(8, trail.x, trail.y, trail.facing, 0, trail.life * 2.6);
+    drawHeroFrame(17, trail.x, trail.y, trail.facing, 0, trail.life * 2.6);
   }
-  const frames = { idle: 0, run: 1 + Math.floor(hero.poseTime * 9) % 4,
-    jump: 5, fall: 6, wall: 7, dash: 8, glide: 10 + Math.floor(hero.poseTime * 16) % 4 };
+  const frames = {
+    idle: Math.floor(hero.poseTime * 5.5) % 4,
+    run: 4 + Math.floor(hero.poseTime * 14) % 8,
+    jump: hero.poseTime < 0.07 ? 12 : 13,
+    fall: hero.vy < 60 ? 14 : 15,
+    wall: 16, dash: 17,
+    glide: 18 + Math.floor(hero.poseTime * 16) % 4,
+  };
   const frame = frames[hero.pose];
-  const bob = frame >= 10 ? Math.floor(hero.poseTime * 10) % 2 : 0;
+  const bob = frame >= 18 ? Math.floor(hero.poseTime * 10) % 2 : 0;
   const alpha = hero.hurt > 0 && Math.floor(hero.hurt * 16) % 2 ? 0.45 : 1;
   drawHeroFrame(frame, hero.x, hero.y - bob, hero.facing, hero.squash, alpha);
 }
