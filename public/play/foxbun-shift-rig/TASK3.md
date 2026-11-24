@@ -1,0 +1,5 @@
+# TASK3 fixes after Hark QA (screenshots of every room, no console errors)
+1. Chinese characters are missing in many UI strings (e.g. "旋翼" shows blank, "怪物星" shows only "星", "水晶巢穴" blank). The embedded UI font is a subset. Fix: in CSS and in canvas ctx.font, add fallbacks after the UI font: "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Noto Sans SC",sans-serif. If a subset rebuild script exists, also rebuild; otherwise fallback is enough.
+2. Boss room: background bg/zone3_boss.png already contains a giant painted monster, which clashes with the real boss sprite. Use bg/zone3_nest.png for the boss room (darkened 15% and shifted), keep boss_03 sprite as the only monster.
+3. Room "clouds" uses the desert background; give it the monster planet background (zone2) with a different parallax offset and a sky tint so it reads as zone 2.
+4. Finish any TASK2 items not done yet (check PROGRESS.md), verify full playthrough path is possible with node tools/check.js, update PROGRESS.md "## TASK2" with done/next, update README controls (X/J tail bounce, C/L dash, M map, Shift/K gears) bilingual. Commit after each part.
